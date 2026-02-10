@@ -1,0 +1,151 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  RUST_TARGET: aarch64-apple-darwin
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: deps/tui/target
+          key: rust-${{ env.RUST_TARGET }}-${{ hashFiles('deps/tui/Cargo.lock') }}
+          restore-keys: rust-${{ env.RUST_TARGET }}-
+
+      - name: Build Rust core (macOS)
+        working-directory: deps/tui
+        run: cargo build -p tenex-core --release --target ${{ env.RUST_TARGET }}
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install backend dependencies
+        working-directory: deps/backend
+        run: bun install --frozen-lockfile
+
+      - name: Install Tuist
+        run: |
+          curl -Ls https://install.tuist.io | bash
+          tuist version
+
+      - name: Generate Xcode project
+        run: tuist generate --no-open
+
+      - name: Import signing certificate
+        env:
+          DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          DEVELOPER_ID_PASSWORD: ${{ secrets.DEVELOPER_ID_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate
+          echo "$DEVELOPER_ID_P12" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 \
+            -P "$DEVELOPER_ID_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+
+          # Allow codesign to access keychain
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+      - name: Build app
+        run: |
+          xcodebuild \
+            -project TenexLauncher.xcodeproj \
+            -scheme TenexLauncher \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            DEVELOPMENT_TEAM=456SHKPP26 \
+            build
+
+      - name: Create DMG
+        run: |
+          APP_PATH="build/Build/Products/Release/TenexLauncher.app"
+          DMG_PATH="TENEX.dmg"
+
+          # Create a temporary directory for DMG contents
+          DMG_DIR=$RUNNER_TEMP/dmg
+          mkdir -p "$DMG_DIR"
+          cp -R "$APP_PATH" "$DMG_DIR/"
+          ln -s /Applications "$DMG_DIR/Applications"
+
+          # Create DMG
+          hdiutil create -volname "TENEX" \
+            -srcfolder "$DMG_DIR" \
+            -ov -format UDZO \
+            "$DMG_PATH"
+
+      - name: Notarize DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: 456SHKPP26
+        run: |
+          xcrun notarytool submit TENEX.dmg \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          xcrun stapler staple TENEX.dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TENEX.dmg
+          path: TENEX.dmg
+
+      - name: Create release (on tag push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TENEX.dmg
+          generate_release_notes: true
+
+      - name: Create latest release (on master push)
+        if: github.ref == 'refs/heads/master' && !startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest Build
+          prerelease: true
+          files: TENEX.dmg
+          body: |
+            Automated build from master (${{ github.sha }}).
+
+            Download TENEX.dmg and drag the app to your Applications folder.
+
+      - name: Cleanup keychain
+        if: always()
+        run: security delete-keychain $RUNNER_TEMP/signing.keychain-db 2>/dev/null || true

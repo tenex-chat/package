@@ -1,0 +1,4 @@
+module UIKit {
+    header "UIKitShim.h"
+    export *
+}

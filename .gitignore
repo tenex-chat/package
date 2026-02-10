@@ -1,0 +1,16 @@
+# Xcode generated (Tuist regenerates these)
+TenexLauncher.xcodeproj/
+TenexLauncher.xcworkspace/
+Derived/
+.package.resolved
+
+# Xcode user data
+xcuserdata/
+*.xcuserstate
+
+# Build
+build/
+DerivedData/
+
+# macOS
+.DS_Store

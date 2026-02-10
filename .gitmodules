@@ -1,0 +1,6 @@
+[submodule "deps/tui"]
+	path = deps/tui
+	url = git@github.com:tenex-chat/tui.git
+[submodule "deps/backend"]
+	path = deps/backend
+	url = git@github.com:tenex-chat/tenex.git

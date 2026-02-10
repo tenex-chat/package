@@ -43,8 +43,11 @@ jobs:
         working-directory: deps/backend
         run: bun install --frozen-lockfile
 
+      - name: Install mise
+        uses: jdx/mise-action@v2
+
       - name: Install Tuist
-        run: brew install --formula tuist
+        run: mise install tuist && mise use -g tuist@latest
 
       - name: Generate Xcode project
         run: tuist generate --no-open

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct MenuBarView: View {
     @ObservedObject var daemon: DaemonManager
-    @ObservedObject var strfryManager: StrfryManager
+    @ObservedObject var relayManager: RelayManager
     @ObservedObject var negentropySync: NegentropySync
     @Environment(\.openWindow) private var openWindow
 
@@ -16,16 +16,16 @@ struct MenuBarView: View {
             }
 
             // Local relay status (only show if enabled)
-            if strfryManager.status != .stopped || strfryManager.lastError != nil {
+            if relayManager.status != .stopped || relayManager.lastError != nil {
                 HStack {
                     Circle()
                         .fill(relayStatusColor)
                         .frame(width: 8, height: 8)
-                    Text("Local Relay: \(strfryManager.status.label)")
+                    Text("Local Relay: \(relayManager.status.label)")
                 }
 
-                if strfryManager.status == .running {
-                    Text("  Uptime: \(formatUptime(strfryManager.uptime))")
+                if relayManager.status == .running {
+                    Text("  Uptime: \(formatUptime(relayManager.uptime))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -66,7 +66,7 @@ struct MenuBarView: View {
         Divider()
 
         Button("Quit TENEX") {
-            strfryManager.stop()
+            relayManager.stop()
             daemon.stop()
             NSApplication.shared.terminate(nil)
         }
@@ -83,7 +83,7 @@ struct MenuBarView: View {
     }
 
     private var relayStatusColor: Color {
-        switch strfryManager.status {
+        switch relayManager.status {
         case .running: .green
         case .starting: .yellow
         case .stopped: .gray

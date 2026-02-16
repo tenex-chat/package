@@ -110,7 +110,7 @@ func NewRelay(config *Config) (*Relay, error) {
 	})
 
 	// NIP-97: Create event watcher service for push notifications
-	eventWatcher := NewEventWatcherService(pushService, storage)
+	eventWatcher := NewEventWatcherService(pushService)
 
 	// NIP-97: Handle push notifications for incoming events
 	relay.OnEventSaved = append(relay.OnEventSaved, func(ctx context.Context, event *nostr.Event) {

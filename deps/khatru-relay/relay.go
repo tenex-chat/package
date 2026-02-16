@@ -18,10 +18,12 @@ import (
 
 // Relay wraps a Khatru relay with TENEX-specific configuration
 type Relay struct {
-	config  *Config
-	khatru  *khatru.Relay
-	server  *http.Server
-	storage *Storage
+	config       *Config
+	khatru       *khatru.Relay
+	server       *http.Server
+	storage      *Storage
+	pushService  *PushNotifyService  // NIP-97 push notifications
+	eventWatcher *EventWatcherService // NIP-97 event watcher
 
 	mu        sync.RWMutex
 	startTime time.Time
@@ -41,6 +43,9 @@ func NewRelay(config *Config) (*Relay, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}
+
+	// Initialize NIP-97 push notification service
+	pushService := NewPushNotifyService(config.PushNotify)
 
 	// Create Khatru relay
 	relay := khatru.NewRelay()
@@ -104,6 +109,18 @@ func NewRelay(config *Config) (*Relay, error) {
 		}
 	})
 
+	// NIP-97: Create event watcher service for push notifications
+	eventWatcher := NewEventWatcherService(pushService, storage)
+
+	// NIP-97: Handle push notifications for incoming events
+	relay.OnEventSaved = append(relay.OnEventSaved, func(ctx context.Context, event *nostr.Event) {
+		// Don't notify for deletion events or internal event types
+		if event.Kind == 5 {
+			return
+		}
+		eventWatcher.OnEventSaved(ctx, event)
+	})
+
 	// Apply default policies
 	relay.RejectEvent = append(relay.RejectEvent,
 		policies.PreventLargeTags(config.Limits.MaxEventTags),
@@ -120,9 +137,11 @@ func NewRelay(config *Config) (*Relay, error) {
 	)
 
 	r := &Relay{
-		config:  config,
-		khatru:  relay,
-		storage: storage,
+		config:       config,
+		khatru:       relay,
+		storage:      storage,
+		pushService:  pushService,
+		eventWatcher: eventWatcher,
 	}
 
 	return r, nil
@@ -142,6 +161,15 @@ func (r *Relay) Start(ctx context.Context) error {
 
 	// Stats endpoint
 	mux.HandleFunc("/stats", r.handleStats)
+
+	// NIP-97: Push notification registration endpoint
+	mux.HandleFunc("/register", r.pushService.HandleRegister)
+
+	// NIP-97: Push notification unregister endpoint
+	mux.HandleFunc("/unregister", r.pushService.HandleUnregister)
+
+	// NIP-97: Push notification stats endpoint
+	mux.HandleFunc("/push/stats", r.handlePushStats)
 
 	// NIP-11 info endpoint (served at root for Accept: application/nostr+json)
 	// Khatru handles this automatically at the WebSocket endpoint
@@ -228,6 +256,13 @@ func (r *Relay) handleStats(w http.ResponseWriter, req *http.Request) {
 		"event_count":    count,
 		"relay_info":     r.config.NIP11,
 	})
+}
+
+// handlePushStats responds with NIP-97 push notification statistics
+func (r *Relay) handlePushStats(w http.ResponseWriter, req *http.Request) {
+	stats := r.pushService.Stats()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }
 
 // WriteConfigTemplate writes a config template to the given path

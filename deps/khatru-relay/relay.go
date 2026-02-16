@@ -65,6 +65,45 @@ func NewRelay(config *Config) (*Relay, error) {
 	relay.DeleteEvent = append(relay.DeleteEvent, storage.DeleteEvent)
 	relay.CountEvents = append(relay.CountEvents, storage.CountEvents)
 
+	// NIP-9: Handle deletion events (kind 5)
+	// When a kind 5 event is stored, delete the referenced events
+	relay.OnEventSaved = append(relay.OnEventSaved, func(ctx context.Context, event *nostr.Event) {
+		if event.Kind != 5 {
+			return
+		}
+
+		// Process each 'e' tag (event IDs to delete)
+		for _, tag := range event.Tags {
+			if len(tag) >= 2 && tag[0] == "e" {
+				targetID := tag[1]
+
+				// Query the target event to verify pubkey matches
+				ch, err := storage.QueryEvents(ctx, nostr.Filter{
+					IDs:   []string{targetID},
+					Limit: 1,
+				})
+				if err != nil {
+					log.Printf("NIP-9: failed to query event %s: %v", targetID, err)
+					continue
+				}
+
+				// Check if event exists and pubkey matches
+				for targetEvent := range ch {
+					if targetEvent.PubKey == event.PubKey {
+						// Same author - delete the event
+						if err := storage.DeleteEvent(ctx, targetEvent); err != nil {
+							log.Printf("NIP-9: failed to delete event %s: %v", targetID, err)
+						} else {
+							log.Printf("NIP-9: deleted event %s (requested by %s...)", targetID[:12], event.PubKey[:12])
+						}
+					} else {
+						log.Printf("NIP-9: ignoring deletion request for %s (pubkey mismatch)", targetID[:12])
+					}
+				}
+			}
+		}
+	})
+
 	// Apply default policies
 	relay.RejectEvent = append(relay.RejectEvent,
 		policies.PreventLargeTags(config.Limits.MaxEventTags),

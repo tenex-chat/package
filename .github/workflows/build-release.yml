@@ -10,6 +10,7 @@ permissions:
 
 env:
   RUST_TARGET: aarch64-apple-darwin
+  GO_VERSION: "1.24"
 
 jobs:
   build:
@@ -35,6 +36,31 @@ jobs:
       - name: Build Rust core (macOS)
         working-directory: deps/tui
         run: cargo build -p tenex-core --release --target ${{ env.RUST_TARGET }}
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: deps/khatru-relay/go.sum
+
+      - name: Build Khatru relay (both architectures)
+        working-directory: deps/khatru-relay
+        run: |
+          # Build for ARM64 (Apple Silicon)
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
+            -o dist/tenex-relay-arm64 .
+          echo "Built tenex-relay-arm64"
+
+          # Build for AMD64 (Intel)
+          GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
+            -o dist/tenex-relay-x86_64 .
+          echo "Built tenex-relay-x86_64"
+
+          # Verify binaries
+          file dist/tenex-relay-arm64
+          file dist/tenex-relay-x86_64
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -93,6 +119,22 @@ jobs:
             ENABLE_HARDENED_RUNTIME=YES \
             build
 
+      - name: Copy relay binaries to app bundle
+        run: |
+          APP_PATH="build/Build/Products/Release/TenexLauncher.app"
+          RESOURCES_PATH="$APP_PATH/Contents/Resources"
+
+          # Copy both relay binaries to Resources
+          cp deps/khatru-relay/dist/tenex-relay-arm64 "$RESOURCES_PATH/"
+          cp deps/khatru-relay/dist/tenex-relay-x86_64 "$RESOURCES_PATH/"
+
+          # Make them executable
+          chmod +x "$RESOURCES_PATH/tenex-relay-arm64"
+          chmod +x "$RESOURCES_PATH/tenex-relay-x86_64"
+
+          echo "Relay binaries copied to app bundle:"
+          ls -la "$RESOURCES_PATH/tenex-relay-"*
+
       - name: Re-sign app with hardened runtime
         run: |
           APP_PATH="build/Build/Products/Release/TenexLauncher.app"
@@ -111,7 +153,18 @@ jobs:
           </plist>
           ENTITLEMENTS
 
-          # Re-sign all frameworks and dylibs first
+          # Sign relay binaries first
+          codesign --force --sign "Developer ID Application" \
+            --timestamp \
+            --options runtime \
+            "$APP_PATH/Contents/Resources/tenex-relay-arm64"
+
+          codesign --force --sign "Developer ID Application" \
+            --timestamp \
+            --options runtime \
+            "$APP_PATH/Contents/Resources/tenex-relay-x86_64"
+
+          # Re-sign all frameworks and dylibs
           find "$APP_PATH" -name "*.framework" -o -name "*.dylib" | while read lib; do
             codesign --force --sign "Developer ID Application" \
               --timestamp \

@@ -34,6 +34,7 @@ let project = Project(
             ],
             resources: [
                 "deps/tui/ios-app/Sources/TenexMVP/Resources/**",
+                "Resources/**",
             ],
             dependencies: [
                 .package(product: "Kingfisher", type: .runtime),

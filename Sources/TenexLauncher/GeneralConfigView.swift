@@ -2,6 +2,9 @@ import SwiftUI
 
 struct GeneralConfigView: View {
     @ObservedObject var store: ConfigStore
+    @ObservedObject var strfryManager: StrfryManager
+    @ObservedObject var negentropySync: NegentropySync
+    @ObservedObject var pendingEventsQueue: PendingEventsQueue
 
     var body: some View {
         Form {
@@ -40,6 +43,106 @@ struct GeneralConfigView: View {
                 }
 
                 TextField("Blossom Server URL", text: bound(\.blossomServerUrl, default: "https://blossom.primal.net"))
+            }
+
+            Section("Local Relay") {
+                Toggle("Enable Local Relay", isOn: localRelayEnabledBinding)
+
+                if store.config.localRelay?.enabled == true {
+                    Toggle("Auto-start with app", isOn: localRelayAutoStartBinding)
+
+                    Toggle("Privacy Mode", isOn: privacyModeBinding)
+                        .help("When enabled, events are never sent to public relays. If the local relay fails, events are queued locally.")
+
+                    HStack {
+                        Text("Port")
+                        Spacer()
+                        TextField("Port", value: localRelayPortBinding, format: .number)
+                            .frame(width: 80)
+                            .multilineTextAlignment(.trailing)
+                            .disabled(strfryManager.status == .running)
+                        if strfryManager.status == .running {
+                            Text("(restart required)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    // Status indicator
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        LocalRelayStatusView(status: strfryManager.status)
+                    }
+
+                    // Sync status
+                    if strfryManager.status == .running {
+                        HStack {
+                            Text("Sync")
+                            Spacer()
+                            Text(negentropySync.status.label)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if let lastSync = negentropySync.lastSuccessfulSync {
+                            HStack {
+                                Text("Last Sync")
+                                Spacer()
+                                Text(lastSync, style: .relative)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    // Control buttons
+                    HStack {
+                        switch strfryManager.status {
+                        case .stopped, .failed:
+                            Button("Start Relay") {
+                                Task {
+                                    strfryManager.configure(
+                                        port: store.config.localRelay?.port ?? 7777,
+                                        privacyMode: store.config.localRelay?.privacyMode ?? false
+                                    )
+                                    await strfryManager.start()
+                                    if strfryManager.status == .running {
+                                        negentropySync.configure(
+                                            localRelayURL: strfryManager.localRelayURL,
+                                            remoteRelays: store.config.localRelay?.syncRelays ?? ["wss://tenex.chat"],
+                                            strfryManager: strfryManager
+                                        )
+                                        negentropySync.start()
+
+                                        // Drain pending events after manual start (waits for queue to load first)
+                                        _ = await pendingEventsQueue.drainWhenReady(
+                                            relayURL: strfryManager.localRelayURL
+                                        )
+                                    }
+                                }
+                            }
+                        case .starting:
+                            Button("Starting...") {}
+                                .disabled(true)
+                        case .running, .fallback:
+                            Button("Stop Relay") {
+                                negentropySync.stop()
+                                strfryManager.stop()
+                            }
+
+                            Button("Sync Now") {
+                                Task {
+                                    await negentropySync.syncNow()
+                                }
+                            }
+                        }
+                    }
+
+                    if let error = strfryManager.lastError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
             }
 
             Section("Paths") {
@@ -118,6 +221,90 @@ struct GeneralConfigView: View {
                 store.saveConfig()
             }
         )
+    }
+
+    // MARK: - Local Relay Bindings
+
+    private var localRelayEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.config.localRelay?.enabled ?? false },
+            set: {
+                if store.config.localRelay == nil {
+                    store.config.localRelay = LocalRelayConfig()
+                }
+                store.config.localRelay?.enabled = $0
+                store.saveConfig()
+            }
+        )
+    }
+
+    private var localRelayAutoStartBinding: Binding<Bool> {
+        Binding(
+            get: { store.config.localRelay?.autoStart ?? true },
+            set: {
+                if store.config.localRelay == nil {
+                    store.config.localRelay = LocalRelayConfig()
+                }
+                store.config.localRelay?.autoStart = $0
+                store.saveConfig()
+            }
+        )
+    }
+
+    private var privacyModeBinding: Binding<Bool> {
+        Binding(
+            get: { store.config.localRelay?.privacyMode ?? false },
+            set: {
+                if store.config.localRelay == nil {
+                    store.config.localRelay = LocalRelayConfig()
+                }
+                store.config.localRelay?.privacyMode = $0
+                strfryManager.configure(
+                    port: store.config.localRelay?.port ?? 7777,
+                    privacyMode: $0
+                )
+                store.saveConfig()
+            }
+        )
+    }
+
+    private var localRelayPortBinding: Binding<Int> {
+        Binding(
+            get: { store.config.localRelay?.port ?? 7777 },
+            set: {
+                if store.config.localRelay == nil {
+                    store.config.localRelay = LocalRelayConfig()
+                }
+                store.config.localRelay?.port = $0
+                store.saveConfig()
+            }
+        )
+    }
+}
+
+// MARK: - Local Relay Status View
+
+struct LocalRelayStatusView: View {
+    let status: StrfryStatus
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+            Text(status.label)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var statusColor: Color {
+        switch status {
+        case .running: .green
+        case .starting: .yellow
+        case .stopped: .gray
+        case .failed: .red
+        case .fallback: .orange
+        }
     }
 }
 

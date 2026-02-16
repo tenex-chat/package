@@ -38,14 +38,6 @@ type PushToken struct {
 	FailureCount int       `json:"failure_count"`
 }
 
-// PushRegistration represents the registration request body
-type PushRegistration struct {
-	Tokens []struct {
-		Pubkey string   `json:"pubkey"`
-		Relays []string `json:"relays"`
-	} `json:"tokens"`
-}
-
 // PushRegistrationResponse represents the registration response
 type PushRegistrationResponse struct {
 	Results []PushRegistrationResult `json:"results"`
@@ -109,6 +101,15 @@ func DefaultPushNotifyConfig() *PushNotifyConfig {
 func NewPushNotifyService(config *PushNotifyConfig) *PushNotifyService {
 	if config == nil {
 		config = DefaultPushNotifyConfig()
+	}
+
+	// Validate configuration
+	if config.MaxFailureCount <= 0 {
+		// Default to 3 to prevent immediate token eviction on first failure
+		config.MaxFailureCount = 3
+	}
+	if config.MaxTokensPerPubkey <= 0 {
+		config.MaxTokensPerPubkey = 5
 	}
 
 	return &PushNotifyService{
@@ -193,21 +194,51 @@ func (s *PushNotifyService) RemoveToken(pubkey, token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.removeTokenLocked(pubkey, token)
+}
+
+// removeTokenLocked removes a token while holding the lock.
+// It also cleans up empty pubkey entries to prevent memory leaks.
+func (s *PushNotifyService) removeTokenLocked(pubkey, token string) {
 	tokens := s.tokens[pubkey]
 	for i, t := range tokens {
 		if t.Token == token {
-			s.tokens[pubkey] = append(tokens[:i], tokens[i+1:]...)
+			newTokens := append(tokens[:i], tokens[i+1:]...)
+			if len(newTokens) == 0 {
+				// Clean up empty entry to prevent memory leak
+				delete(s.tokens, pubkey)
+			} else {
+				s.tokens[pubkey] = newTokens
+			}
 			return
 		}
 	}
 }
 
-// GetTokensForPubkey returns all tokens registered for a pubkey
+// GetTokensForPubkey returns a copy of all tokens registered for a pubkey.
+// The returned slice is safe to iterate over without holding locks.
 func (s *PushNotifyService) GetTokensForPubkey(pubkey string) []*PushToken {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.tokens[pubkey]
+	tokens := s.tokens[pubkey]
+	if len(tokens) == 0 {
+		return nil
+	}
+
+	// Return a copy to prevent data races during iteration
+	result := make([]*PushToken, len(tokens))
+	for i, t := range tokens {
+		// Deep copy the token to prevent race conditions on token fields
+		tokenCopy := *t
+		// Also copy the relays slice
+		if len(t.Relays) > 0 {
+			tokenCopy.Relays = make([]string, len(t.Relays))
+			copy(tokenCopy.Relays, t.Relays)
+		}
+		result[i] = &tokenCopy
+	}
+	return result
 }
 
 // NotifyEvent sends push notifications for an event to all registered recipients
@@ -233,28 +264,41 @@ func (s *PushNotifyService) NotifyEvent(ctx context.Context, event *nostr.Event,
 	var lastErr error
 	for _, token := range tokens {
 		var deliverErr error
+		var delivered bool
 
 		switch token.System {
 		case PushSystemApple:
 			if s.deliverAPNS != nil {
 				deliverErr = s.deliverAPNS(token.Token, payload)
+				delivered = true
+			} else {
+				log.Printf("NIP-97: APNS delivery callback not configured, skipping token for %s", recipientPubkey[:12])
 			}
 		case PushSystemGoogle:
 			if s.deliverFCM != nil {
 				deliverErr = s.deliverFCM(token.Token, payload)
+				delivered = true
+			} else {
+				log.Printf("NIP-97: FCM delivery callback not configured, skipping token for %s", recipientPubkey[:12])
 			}
 		case PushSystemUnifiedPush:
 			if s.deliverUnifiedPush != nil {
 				deliverErr = s.deliverUnifiedPush(token.Token, payload)
+				delivered = true
+			} else {
+				log.Printf("NIP-97: UnifiedPush delivery callback not configured, skipping token for %s", recipientPubkey[:12])
 			}
 		}
 
 		if deliverErr != nil {
 			lastErr = deliverErr
 			s.recordFailure(recipientPubkey, token.Token)
-		} else {
+		} else if delivered {
+			// Only record success if we actually attempted delivery
 			s.recordSuccess(recipientPubkey, token.Token)
 		}
+		// If not delivered (callback not set), we don't record success or failure
+		// This prevents false success counts while avoiding token removal for config issues
 	}
 
 	return lastErr
@@ -294,10 +338,10 @@ func (s *PushNotifyService) recordFailure(pubkey, token string) {
 		if t.Token == token {
 			tokens[i].FailureCount++
 
-			// Remove token if too many failures
-			if tokens[i].FailureCount >= s.config.MaxFailureCount {
-				log.Printf("Removing push token for %s after %d failures", pubkey[:12], tokens[i].FailureCount)
-				s.tokens[pubkey] = append(tokens[:i], tokens[i+1:]...)
+			// Remove token if too many failures (and MaxFailureCount > 0)
+			if s.config.MaxFailureCount > 0 && tokens[i].FailureCount >= s.config.MaxFailureCount {
+				log.Printf("NIP-97: Removing push token for %s after %d failures", pubkey[:12], tokens[i].FailureCount)
+				s.removeTokenLocked(pubkey, token)
 			}
 			return
 		}
@@ -338,8 +382,11 @@ func (s *PushNotifyService) HandleRegister(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Validate NIP-98 auth event
-	authEvent, err := parseNIP98Auth(authHeader)
+	// Build the expected URL from the request (proxy-aware)
+	expectedURL := getRequestURL(r)
+
+	// Validate NIP-98 auth event with method and URL binding
+	authEvent, err := parseNIP98Auth(authHeader, http.MethodPost, expectedURL)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Invalid NIP-98 auth: %v", err), http.StatusUnauthorized)
 		return
@@ -401,7 +448,11 @@ func (s *PushNotifyService) HandleUnregister(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	authEvent, err := parseNIP98Auth(authHeader)
+	// Build the expected URL from the request (proxy-aware)
+	expectedURL := getRequestURL(r)
+
+	// Validate NIP-98 auth event with method and URL binding
+	authEvent, err := parseNIP98Auth(authHeader, http.MethodDelete, expectedURL)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Invalid NIP-98 auth: %v", err), http.StatusUnauthorized)
 		return
@@ -421,8 +472,148 @@ func (s *PushNotifyService) HandleUnregister(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(map[string]string{"status": "removed"})
 }
 
-// parseNIP98Auth parses a NIP-98 Authorization header and returns the auth event
-func parseNIP98Auth(authHeader string) (*nostr.Event, error) {
+// NIP98Kind is the event kind for NIP-98 HTTP Auth
+const NIP98Kind = 27235
+
+// getRequestURL constructs the full request URL, properly handling TLS-terminating
+// proxies and load balancers by checking standard proxy headers.
+// Order of precedence:
+// 1. Forwarded header (RFC 7239) - "for=...; proto=https; host=example.com"
+// 2. X-Forwarded-Proto + X-Forwarded-Host headers
+// 3. X-Forwarded-Proto + r.Host
+// 4. Direct connection (r.TLS + r.Host)
+func getRequestURL(r *http.Request) string {
+	scheme := "http"
+	host := r.Host
+	foundProto := false
+	foundHost := false
+
+	// Check RFC 7239 Forwarded header first (highest priority)
+	if forwarded := r.Header.Get("Forwarded"); forwarded != "" {
+		// Parse Forwarded header - RFC 7239 allows comma-separated entries for multiple proxies
+		// Example: "for=proxy1, for=proxy2; host=example.com" or "for=client; proto=https; host=example.com, for=proxy2"
+		// Per RFC 7239, we only use the first entry (leftmost = added by first/trusted proxy)
+		// If the first entry lacks proto/host, we fall back to X-Forwarded-* headers below
+		foundProto, foundHost = parseForwardedHeader(forwarded, &scheme, &host)
+	}
+
+	// Fall back to X-Forwarded-* headers if Forwarded didn't provide proto or host
+	if !foundProto {
+		if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+			scheme = proto
+		} else if r.TLS != nil {
+			scheme = "https"
+		}
+	}
+
+	if !foundHost {
+		if fwdHost := r.Header.Get("X-Forwarded-Host"); fwdHost != "" {
+			host = fwdHost
+		}
+	}
+
+	return fmt.Sprintf("%s://%s%s", scheme, host, r.URL.Path)
+}
+
+// parseForwardedHeader parses an RFC 7239 Forwarded header value.
+// It handles comma-separated entries for multiple proxies and semicolon-separated
+// key-value pairs within each entry. Returns whether proto and host were found.
+// Example formats:
+//   - "for=client; proto=https; host=example.com"
+//   - "for=proxy1, for=proxy2; host=example.com"  (comma separates proxy entries)
+//   - "proto=\"https\"; host=\"example.com\""     (quoted values)
+func parseForwardedHeader(header string, scheme, host *string) (foundProto, foundHost bool) {
+	// Split by comma first (RFC 7239: multiple proxies are comma-separated)
+	entries := splitForwardedEntries(header)
+
+	// RFC 7239: Entries are ordered left-to-right, with leftmost being closest to client.
+	// We ONLY parse the FIRST entry. If it doesn't have proto/host, we return found=false
+	// to trigger fallback logic (X-Forwarded-* headers or r.TLS).
+	// We do NOT walk through subsequent entries, as those represent proxy-to-proxy hops.
+	if len(entries) == 0 {
+		return false, false
+	}
+
+	// Parse only the first (client-facing) entry
+	for _, part := range splitForwardedParts(entries[0]) {
+		part = trimSpace(part)
+		if len(part) > 6 && part[:6] == "proto=" {
+			*scheme = unquoteValue(part[6:])
+			foundProto = true
+		} else if len(part) > 5 && part[:5] == "host=" {
+			*host = unquoteValue(part[5:])
+			foundHost = true
+		}
+	}
+	return foundProto, foundHost
+}
+
+// splitForwardedEntries splits a Forwarded header by commas (proxy entry separator),
+// respecting quoted values.
+func splitForwardedEntries(header string) []string {
+	return splitForwardedBy(header, ',')
+}
+
+// splitForwardedParts splits a single Forwarded entry by semicolons (key-value separator),
+// respecting quoted values.
+func splitForwardedParts(entry string) []string {
+	return splitForwardedBy(entry, ';')
+}
+
+// splitForwardedBy splits a Forwarded header/entry by the given delimiter,
+// handling quoted values properly (RFC 7239 allows quoted values).
+func splitForwardedBy(s string, delimiter byte) []string {
+	var parts []string
+	var current []byte
+	inQuote := false
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '"' {
+			inQuote = !inQuote
+			current = append(current, c)
+		} else if c == delimiter && !inQuote {
+			if len(current) > 0 {
+				parts = append(parts, string(current))
+				current = current[:0]
+			}
+		} else {
+			current = append(current, c)
+		}
+	}
+	if len(current) > 0 {
+		parts = append(parts, string(current))
+	}
+	return parts
+}
+
+// unquoteValue removes surrounding double quotes from a value if present.
+// RFC 7239 allows quoted values: proto="https", host="example.com"
+func unquoteValue(s string) string {
+	s = trimSpace(s)
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
+// trimSpace trims leading and trailing whitespace from a string
+// without importing strings package
+func trimSpace(s string) string {
+	start := 0
+	end := len(s)
+	for start < end && (s[start] == ' ' || s[start] == '\t') {
+		start++
+	}
+	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
+		end--
+	}
+	return s[start:end]
+}
+
+// parseNIP98Auth parses a NIP-98 Authorization header and validates the auth event
+// It requires the expected method and URL to prevent cross-endpoint and replay attacks
+func parseNIP98Auth(authHeader, expectedMethod, expectedURL string) (*nostr.Event, error) {
 	// NIP-98 format: "Nostr <base64-encoded-event>"
 	if len(authHeader) < 7 || authHeader[:6] != "Nostr " {
 		return nil, fmt.Errorf("invalid authorization format")
@@ -439,9 +630,9 @@ func parseNIP98Auth(authHeader string) (*nostr.Event, error) {
 		return nil, fmt.Errorf("failed to parse auth event: %w", err)
 	}
 
-	// Verify event kind (22242 for NIP-98)
-	if event.Kind != 22242 {
-		return nil, fmt.Errorf("invalid auth event kind: %d", event.Kind)
+	// Verify event kind (27235 for NIP-98, not 22242)
+	if event.Kind != NIP98Kind {
+		return nil, fmt.Errorf("invalid auth event kind: %d, expected %d", event.Kind, NIP98Kind)
 	}
 
 	// Verify signature
@@ -454,6 +645,36 @@ func parseNIP98Auth(authHeader string) (*nostr.Event, error) {
 	now := nostr.Now()
 	if event.CreatedAt < now-60 || event.CreatedAt > now+60 {
 		return nil, fmt.Errorf("auth event expired or from future")
+	}
+
+	// NIP-98: Validate required "u" tag (URL binding)
+	var foundURL string
+	for _, tag := range event.Tags {
+		if len(tag) >= 2 && tag[0] == "u" {
+			foundURL = tag[1]
+			break
+		}
+	}
+	if foundURL == "" {
+		return nil, fmt.Errorf("missing required 'u' tag for URL binding")
+	}
+	if foundURL != expectedURL {
+		return nil, fmt.Errorf("URL mismatch: auth for '%s' but request to '%s'", foundURL, expectedURL)
+	}
+
+	// NIP-98: Validate required "method" tag
+	var foundMethod string
+	for _, tag := range event.Tags {
+		if len(tag) >= 2 && tag[0] == "method" {
+			foundMethod = tag[1]
+			break
+		}
+	}
+	if foundMethod == "" {
+		return nil, fmt.Errorf("missing required 'method' tag")
+	}
+	if foundMethod != expectedMethod {
+		return nil, fmt.Errorf("method mismatch: auth for '%s' but request is '%s'", foundMethod, expectedMethod)
 	}
 
 	return &event, nil
@@ -507,31 +728,23 @@ func WrapEventNIP44(event *nostr.Event, senderPrivkey, recipientPubkey string) (
 	return json.Marshal(event)
 }
 
-// EventWatcherService watches for events and triggers notifications
+// EventWatcherService watches for events and triggers notifications.
+// Currently uses p-tag based notification triggers.
+// TODO: Future enhancement - support kind:10097 event watcher preference lists
 type EventWatcherService struct {
 	pushService *PushNotifyService
-	storage     *Storage
-
-	// Watched pubkeys and their filters
-	mu       sync.RWMutex
-	watchers map[string][]nostr.Filter // pubkey -> filters to watch
 }
 
 // NewEventWatcherService creates a new event watcher
-func NewEventWatcherService(pushService *PushNotifyService, storage *Storage) *EventWatcherService {
+func NewEventWatcherService(pushService *PushNotifyService) *EventWatcherService {
 	return &EventWatcherService{
 		pushService: pushService,
-		storage:     storage,
-		watchers:    make(map[string][]nostr.Filter),
 	}
 }
 
 // OnEventSaved is called when a new event is saved to the relay
 // It checks if any registered watchers should be notified
 func (s *EventWatcherService) OnEventSaved(ctx context.Context, event *nostr.Event) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	// Check p-tags for mentions
 	for _, tag := range event.Tags {
 		if len(tag) >= 2 && tag[0] == "p" {

@@ -16,6 +16,15 @@ struct TenexConfig: Codable {
     var compression: CompressionConfig?
     var claudeCode: ClaudeCodeConfig?
     var escalation: EscalationConfig?
+    var localRelay: LocalRelayConfig?
+}
+
+struct LocalRelayConfig: Codable {
+    var enabled: Bool?
+    var autoStart: Bool?
+    var privacyMode: Bool?
+    var port: Int?
+    var syncRelays: [String]?
 }
 
 struct LoggingConfig: Codable {

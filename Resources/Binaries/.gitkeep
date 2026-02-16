@@ -1,0 +1,11 @@
+# Placeholder for strfry binary
+# The strfry binary should be compiled for arm64 macOS and placed here as 'strfry'
+# Build instructions: https://github.com/hoytech/strfry
+#
+# Quick build for macOS arm64:
+#   git clone https://github.com/hoytech/strfry.git
+#   cd strfry
+#   git submodule update --init
+#   make setup-golpe
+#   make -j$(nproc)
+#   cp strfry /path/to/Resources/Binaries/

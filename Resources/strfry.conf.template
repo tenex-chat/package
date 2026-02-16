@@ -1,0 +1,72 @@
+# strfry configuration for TENEX local relay
+# This file is auto-generated. Manual edits may be overwritten.
+
+##
+## Database settings
+##
+
+db = "${DATA_DIR}"
+
+##
+## HTTP/WebSocket server settings
+##
+
+relay {
+    bind = "127.0.0.1"
+    port = ${PORT}
+
+    # Set to true if behind a reverse proxy
+    realIpHeader = ""
+
+    info {
+        name = "TENEX Local Relay"
+        description = "Private local relay for TENEX agent communication"
+        pubkey = ""
+        contact = ""
+    }
+}
+
+##
+## Event handling
+##
+
+events {
+    # Maximum size of events in bytes (1MB)
+    maxEventSize = 1048576
+
+    # Reject events older than this many seconds (0 = no limit)
+    rejectEventsOlderThanSeconds = 0
+
+    # Reject events newer than this many seconds into the future
+    rejectEventsNewerThanSeconds = 900
+
+    # Allow ephemeral events (kind 20000-29999)
+    ephemeralEventsLifetimeSeconds = 300
+}
+
+##
+## Write policy (permissive - local use only)
+##
+
+writePolicy {
+    # Allow all writes - this is a local relay
+    plugin = ""
+}
+
+##
+## Negentropy sync support (required for bi-directional sync)
+##
+
+negentropy {
+    enabled = true
+    maxSyncEvents = 1000000
+}
+
+##
+## Logging
+##
+
+logging {
+    # Log level: trace, debug, info, warn, error, fatal
+    level = "info"
+}

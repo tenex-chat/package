@@ -21,6 +21,9 @@ enum SidebarTab: String, CaseIterable, Identifiable {
 struct MainWindow: View {
     @ObservedObject var daemon: DaemonManager
     @ObservedObject var configStore: ConfigStore
+    @ObservedObject var strfryManager: StrfryManager
+    @ObservedObject var negentropySync: NegentropySync
+    @ObservedObject var pendingEventsQueue: PendingEventsQueue
 
     @State private var selectedTab: SidebarTab = .daemon
 
@@ -41,7 +44,12 @@ struct MainWindow: View {
             case .llms:
                 LLMsView(store: configStore)
             case .config:
-                GeneralConfigView(store: configStore)
+                GeneralConfigView(
+                    store: configStore,
+                    strfryManager: strfryManager,
+                    negentropySync: negentropySync,
+                    pendingEventsQueue: pendingEventsQueue
+                )
             }
         }
     }

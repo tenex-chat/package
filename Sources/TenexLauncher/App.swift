@@ -5,6 +5,9 @@ struct TenexLauncherApp: App {
     @StateObject private var daemon = DaemonManager()
     @StateObject private var configStore = ConfigStore()
     @StateObject private var coreManager = TenexCoreManager()
+    @StateObject private var strfryManager = StrfryManager()
+    @StateObject private var negentropySync = NegentropySync()
+    @StateObject private var pendingEventsQueue = PendingEventsQueue()
 
     @State private var isLoggedIn = false
     @State private var userNpub = ""
@@ -13,7 +16,11 @@ struct TenexLauncherApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarView(daemon: daemon)
+            MenuBarView(
+                daemon: daemon,
+                strfryManager: strfryManager,
+                negentropySync: negentropySync
+            )
         } label: {
             let nsImage = MenuBarIcon.create(running: daemon.status == .running)
             Image(nsImage: nsImage)
@@ -22,8 +29,14 @@ struct TenexLauncherApp: App {
 
         // Settings / daemon management window
         Window("TENEX Settings", id: "settings") {
-            MainWindow(daemon: daemon, configStore: configStore)
-                .frame(minWidth: 700, minHeight: 500)
+            MainWindow(
+                daemon: daemon,
+                configStore: configStore,
+                strfryManager: strfryManager,
+                negentropySync: negentropySync,
+                pendingEventsQueue: pendingEventsQueue
+            )
+            .frame(minWidth: 700, minHeight: 500)
         }
         .defaultSize(width: 800, height: 600)
 
@@ -63,7 +76,11 @@ struct TenexLauncherApp: App {
             }
             .frame(minWidth: 800, minHeight: 600)
             .onChange(of: coreManager.isInitialized) { _, isInitialized in
-                if isInitialized { attemptAutoLogin() }
+                if isInitialized {
+                    // Start local relay if enabled and auto-start is on
+                    startLocalRelayIfNeeded()
+                    attemptAutoLogin()
+                }
             }
             .onChange(of: isLoggedIn) { _, loggedIn in
                 if loggedIn {
@@ -105,4 +122,34 @@ struct TenexLauncherApp: App {
             }
         }
     }
+
+    private func startLocalRelayIfNeeded() {
+        guard let localRelay = configStore.config.localRelay,
+              localRelay.enabled == true,
+              localRelay.autoStart != false else {
+            return
+        }
+
+        Task { @MainActor in
+            let port = localRelay.port ?? 7777
+            let privacyMode = localRelay.privacyMode ?? false
+
+            strfryManager.configure(port: port, privacyMode: privacyMode)
+            await strfryManager.start()
+
+            // If relay started successfully, start sync and drain pending events
+            if strfryManager.status == .running {
+                negentropySync.configure(
+                    localRelayURL: strfryManager.localRelayURL,
+                    remoteRelays: localRelay.syncRelays ?? ["wss://tenex.chat"],
+                    strfryManager: strfryManager
+                )
+                negentropySync.start()
+
+                // Drain any pending events (waits for queue to load first)
+                _ = await pendingEventsQueue.drainWhenReady(relayURL: strfryManager.localRelayURL)
+            }
+        }
+    }
+
 }

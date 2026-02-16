@@ -2,7 +2,7 @@ import SwiftUI
 
 struct GeneralConfigView: View {
     @ObservedObject var store: ConfigStore
-    @ObservedObject var strfryManager: StrfryManager
+    @ObservedObject var relayManager: RelayManager
     @ObservedObject var negentropySync: NegentropySync
     @ObservedObject var pendingEventsQueue: PendingEventsQueue
 
@@ -60,8 +60,8 @@ struct GeneralConfigView: View {
                         TextField("Port", value: localRelayPortBinding, format: .number)
                             .frame(width: 80)
                             .multilineTextAlignment(.trailing)
-                            .disabled(strfryManager.status == .running)
-                        if strfryManager.status == .running {
+                            .disabled(relayManager.status == .running)
+                        if relayManager.status == .running {
                             Text("(restart required)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -72,11 +72,11 @@ struct GeneralConfigView: View {
                     HStack {
                         Text("Status")
                         Spacer()
-                        LocalRelayStatusView(status: strfryManager.status)
+                        LocalRelayStatusView(status: relayManager.status)
                     }
 
                     // Sync status
-                    if strfryManager.status == .running {
+                    if relayManager.status == .running {
                         HStack {
                             Text("Sync")
                             Spacer()
@@ -96,26 +96,26 @@ struct GeneralConfigView: View {
 
                     // Control buttons
                     HStack {
-                        switch strfryManager.status {
+                        switch relayManager.status {
                         case .stopped, .failed:
                             Button("Start Relay") {
                                 Task {
-                                    strfryManager.configure(
+                                    relayManager.configure(
                                         port: store.config.localRelay?.port ?? 7777,
                                         privacyMode: store.config.localRelay?.privacyMode ?? false
                                     )
-                                    await strfryManager.start()
-                                    if strfryManager.status == .running {
+                                    await relayManager.start()
+                                    if relayManager.status == .running {
                                         negentropySync.configure(
-                                            localRelayURL: strfryManager.localRelayURL,
+                                            localRelayURL: relayManager.localRelayURL,
                                             remoteRelays: store.config.localRelay?.syncRelays ?? ["wss://tenex.chat"],
-                                            strfryManager: strfryManager
+                                            relayManager: relayManager
                                         )
                                         negentropySync.start()
 
                                         // Drain pending events after manual start (waits for queue to load first)
                                         _ = await pendingEventsQueue.drainWhenReady(
-                                            relayURL: strfryManager.localRelayURL
+                                            relayURL: relayManager.localRelayURL
                                         )
                                     }
                                 }
@@ -126,7 +126,7 @@ struct GeneralConfigView: View {
                         case .running, .fallback:
                             Button("Stop Relay") {
                                 negentropySync.stop()
-                                strfryManager.stop()
+                                relayManager.stop()
                             }
 
                             Button("Sync Now") {
@@ -137,7 +137,7 @@ struct GeneralConfigView: View {
                         }
                     }
 
-                    if let error = strfryManager.lastError {
+                    if let error = relayManager.lastError {
                         Text(error)
                             .font(.caption)
                             .foregroundStyle(.red)
@@ -259,7 +259,7 @@ struct GeneralConfigView: View {
                     store.config.localRelay = LocalRelayConfig()
                 }
                 store.config.localRelay?.privacyMode = $0
-                strfryManager.configure(
+                relayManager.configure(
                     port: store.config.localRelay?.port ?? 7777,
                     privacyMode: $0
                 )
@@ -285,7 +285,7 @@ struct GeneralConfigView: View {
 // MARK: - Local Relay Status View
 
 struct LocalRelayStatusView: View {
-    let status: StrfryStatus
+    let status: RelayStatus
 
     var body: some View {
         HStack(spacing: 6) {

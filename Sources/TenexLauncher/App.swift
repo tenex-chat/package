@@ -5,7 +5,7 @@ struct TenexLauncherApp: App {
     @StateObject private var daemon = DaemonManager()
     @StateObject private var configStore = ConfigStore()
     @StateObject private var coreManager = TenexCoreManager()
-    @StateObject private var strfryManager = StrfryManager()
+    @StateObject private var relayManager = RelayManager()
     @StateObject private var negentropySync = NegentropySync()
     @StateObject private var pendingEventsQueue = PendingEventsQueue()
 
@@ -18,7 +18,7 @@ struct TenexLauncherApp: App {
         MenuBarExtra {
             MenuBarView(
                 daemon: daemon,
-                strfryManager: strfryManager,
+                relayManager: relayManager,
                 negentropySync: negentropySync
             )
         } label: {
@@ -32,7 +32,7 @@ struct TenexLauncherApp: App {
             MainWindow(
                 daemon: daemon,
                 configStore: configStore,
-                strfryManager: strfryManager,
+                relayManager: relayManager,
                 negentropySync: negentropySync,
                 pendingEventsQueue: pendingEventsQueue
             )
@@ -134,20 +134,20 @@ struct TenexLauncherApp: App {
             let port = localRelay.port ?? 7777
             let privacyMode = localRelay.privacyMode ?? false
 
-            strfryManager.configure(port: port, privacyMode: privacyMode)
-            await strfryManager.start()
+            relayManager.configure(port: port, privacyMode: privacyMode)
+            await relayManager.start()
 
             // If relay started successfully, start sync and drain pending events
-            if strfryManager.status == .running {
+            if relayManager.status == .running {
                 negentropySync.configure(
-                    localRelayURL: strfryManager.localRelayURL,
+                    localRelayURL: relayManager.localRelayURL,
                     remoteRelays: localRelay.syncRelays ?? ["wss://tenex.chat"],
-                    strfryManager: strfryManager
+                    relayManager: relayManager
                 )
                 negentropySync.start()
 
                 // Drain any pending events (waits for queue to load first)
-                _ = await pendingEventsQueue.drainWhenReady(relayURL: strfryManager.localRelayURL)
+                _ = await pendingEventsQueue.drainWhenReady(relayURL: relayManager.localRelayURL)
             }
         }
     }

@@ -27,7 +27,9 @@ type Storage struct {
 	byAuthorKind map[string][]string           // pubkey:kind -> event IDs
 	byTag        map[string]map[string][]string // tagName -> tagValue -> event IDs
 
-	dirty bool // Track if we need to persist
+	dirty    bool          // Track if we need to persist
+	closeCh  chan struct{} // Signal to stop persistLoop
+	closedCh chan struct{} // Signals persistLoop has stopped
 }
 
 // NewStorage creates a new file-backed storage
@@ -39,6 +41,8 @@ func NewStorage(path string) (*Storage, error) {
 		byAuthor:     make(map[string][]string),
 		byAuthorKind: make(map[string][]string),
 		byTag:        make(map[string]map[string][]string),
+		closeCh:      make(chan struct{}),
+		closedCh:     make(chan struct{}),
 	}
 
 	// Try to load existing data
@@ -54,6 +58,11 @@ func NewStorage(path string) (*Storage, error) {
 
 // Close closes the storage and persists data
 func (s *Storage) Close() error {
+	// Signal persistLoop to stop
+	close(s.closeCh)
+	// Wait for it to finish
+	<-s.closedCh
+	// Final persist
 	return s.persist()
 }
 
@@ -338,16 +347,22 @@ func (s *Storage) CountEvents(ctx context.Context, filter nostr.Filter) (int64, 
 func (s *Storage) persistLoop() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	defer close(s.closedCh)
 
-	for range ticker.C {
-		s.mu.RLock()
-		dirty := s.dirty
-		s.mu.RUnlock()
+	for {
+		select {
+		case <-s.closeCh:
+			return
+		case <-ticker.C:
+			s.mu.RLock()
+			dirty := s.dirty
+			s.mu.RUnlock()
 
-		if dirty {
-			if err := s.persist(); err != nil {
-				// Log error but continue
-				fmt.Printf("Failed to persist storage: %v\n", err)
+			if dirty {
+				if err := s.persist(); err != nil {
+					// Log error but continue
+					fmt.Printf("Failed to persist storage: %v\n", err)
+				}
 			}
 		}
 	}

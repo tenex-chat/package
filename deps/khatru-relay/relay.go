@@ -18,15 +18,13 @@ import (
 
 // Relay wraps a Khatru relay with TENEX-specific configuration
 type Relay struct {
-	config       *Config
-	khatru       *khatru.Relay
-	server       *http.Server
-	storage      *Storage
-	pushService  *PushNotifyService  // NIP-97 push notifications
-	eventWatcher *EventWatcherService // NIP-97 event watcher
+	config  *Config
+	khatru  *khatru.Relay
+	server  *http.Server
+	storage *Storage
 
-	mu        sync.RWMutex
-	startTime time.Time
+	mu         sync.RWMutex
+	startTime  time.Time
 	eventCount int64
 }
 
@@ -43,9 +41,6 @@ func NewRelay(config *Config) (*Relay, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}
-
-	// Initialize NIP-97 push notification service
-	pushService := NewPushNotifyService(config.PushNotify)
 
 	// Create Khatru relay
 	relay := khatru.NewRelay()
@@ -99,26 +94,26 @@ func NewRelay(config *Config) (*Relay, error) {
 						if err := storage.DeleteEvent(ctx, targetEvent); err != nil {
 							log.Printf("NIP-9: failed to delete event %s: %v", targetID, err)
 						} else {
-							log.Printf("NIP-9: deleted event %s (requested by %s...)", targetID[:12], event.PubKey[:12])
+							targetIDLog := targetID
+							if len(targetIDLog) > 12 {
+								targetIDLog = targetIDLog[:12]
+							}
+							pubKeyLog := event.PubKey
+							if len(pubKeyLog) > 12 {
+								pubKeyLog = pubKeyLog[:12]
+							}
+							log.Printf("NIP-9: deleted event %s (requested by %s...)", targetIDLog, pubKeyLog)
 						}
 					} else {
-						log.Printf("NIP-9: ignoring deletion request for %s (pubkey mismatch)", targetID[:12])
+						targetIDLog := targetID
+						if len(targetIDLog) > 12 {
+							targetIDLog = targetIDLog[:12]
+						}
+						log.Printf("NIP-9: ignoring deletion request for %s (pubkey mismatch)", targetIDLog)
 					}
 				}
 			}
 		}
-	})
-
-	// NIP-97: Create event watcher service for push notifications
-	eventWatcher := NewEventWatcherService(pushService)
-
-	// NIP-97: Handle push notifications for incoming events
-	relay.OnEventSaved = append(relay.OnEventSaved, func(ctx context.Context, event *nostr.Event) {
-		// Don't notify for deletion events or internal event types
-		if event.Kind == 5 {
-			return
-		}
-		eventWatcher.OnEventSaved(ctx, event)
 	})
 
 	// Apply default policies
@@ -127,6 +122,13 @@ func NewRelay(config *Config) (*Relay, error) {
 		policies.RestrictToSpecifiedKinds(
 			false, // Not restrictive - allow all kinds
 		),
+		// Enforce MaxContentLength
+		func(ctx context.Context, event *nostr.Event) (reject bool, msg string) {
+			if len(event.Content) > config.Limits.MaxContentLength {
+				return true, fmt.Sprintf("content too large: %d > %d bytes", len(event.Content), config.Limits.MaxContentLength)
+			}
+			return false, ""
+		},
 	)
 
 	// Allow all connections (local relay, trust local network)
@@ -137,11 +139,9 @@ func NewRelay(config *Config) (*Relay, error) {
 	)
 
 	r := &Relay{
-		config:       config,
-		khatru:       relay,
-		storage:      storage,
-		pushService:  pushService,
-		eventWatcher: eventWatcher,
+		config:  config,
+		khatru:  relay,
+		storage: storage,
 	}
 
 	return r, nil
@@ -162,15 +162,6 @@ func (r *Relay) Start(ctx context.Context) error {
 	// Stats endpoint
 	mux.HandleFunc("/stats", r.handleStats)
 
-	// NIP-97: Push notification registration endpoint
-	mux.HandleFunc("/register", r.pushService.HandleRegister)
-
-	// NIP-97: Push notification unregister endpoint
-	mux.HandleFunc("/unregister", r.pushService.HandleUnregister)
-
-	// NIP-97: Push notification stats endpoint
-	mux.HandleFunc("/push/stats", r.handlePushStats)
-
 	// NIP-11 info endpoint (served at root for Accept: application/nostr+json)
 	// Khatru handles this automatically at the WebSocket endpoint
 
@@ -178,7 +169,7 @@ func (r *Relay) Start(ctx context.Context) error {
 	mux.Handle("/", r.khatru)
 
 	// Create server
-	addr := fmt.Sprintf("127.0.0.1:%d", r.config.Port)
+	addr := fmt.Sprintf("%s:%d", r.config.BindAddress, r.config.Port)
 	r.server = &http.Server{
 		Addr:         addr,
 		Handler:      mux,
@@ -248,7 +239,7 @@ func (r *Relay) handleStats(w http.ResponseWriter, req *http.Request) {
 	uptime := time.Since(r.startTime)
 	r.mu.RUnlock()
 
-	count, _ := r.storage.CountEvents(context.Background(), nostr.Filter{})
+	count, _ := r.storage.CountEvents(req.Context(), nostr.Filter{})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -256,13 +247,6 @@ func (r *Relay) handleStats(w http.ResponseWriter, req *http.Request) {
 		"event_count":    count,
 		"relay_info":     r.config.NIP11,
 	})
-}
-
-// handlePushStats responds with NIP-97 push notification statistics
-func (r *Relay) handlePushStats(w http.ResponseWriter, req *http.Request) {
-	stats := r.pushService.Stats()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
 }
 
 // WriteConfigTemplate writes a config template to the given path

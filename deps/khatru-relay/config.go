@@ -10,12 +10,11 @@ import (
 
 // Config represents the relay configuration
 type Config struct {
-	Port       int               `json:"port"`
-	DataDir    string            `json:"data_dir"`
-	NIP11      NIP11Config       `json:"nip11"`
-	Limits     LimitsConfig      `json:"limits"`
-	Negentropy NegentropyConfig  `json:"negentropy"`
-	PushNotify *PushNotifyConfig `json:"push_notify,omitempty"`
+	Port       int              `json:"port"`
+	DataDir    string           `json:"data_dir"`
+	NIP11      NIP11Config      `json:"nip11"`
+	Limits     LimitsConfig     `json:"limits"`
+	Negentropy NegentropyConfig `json:"negentropy"`
 }
 
 // NIP11Config contains all NIP-11 relay information document fields
@@ -53,7 +52,7 @@ func DefaultConfig() *Config {
 			Description:   "Local Nostr relay for TENEX",
 			Pubkey:        "",
 			Contact:       "",
-			SupportedNIPs: []int{1, 2, 4, 9, 11, 12, 16, 20, 22, 33, 40, 42, 77, 97},
+			SupportedNIPs: []int{1, 2, 4, 9, 11, 12, 16, 20, 22, 33, 40, 42, 77},
 			Software:      "tenex-khatru-relay",
 			Version:       "0.1.0",
 		},
@@ -67,7 +66,6 @@ func DefaultConfig() *Config {
 		Negentropy: NegentropyConfig{
 			Enabled: true,
 		},
-		PushNotify: DefaultPushNotifyConfig(),
 	}
 }
 

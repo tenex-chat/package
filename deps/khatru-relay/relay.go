@@ -23,9 +23,8 @@ type Relay struct {
 	server  *http.Server
 	storage *Storage
 
-	mu         sync.RWMutex
-	startTime  time.Time
-	eventCount int64
+	mu        sync.RWMutex
+	startTime time.Time
 }
 
 // NewRelay creates a new relay with the given configuration

@@ -43,12 +43,19 @@ type NegentropyConfig struct {
 	Enabled bool `json:"enabled"`
 }
 
+func defaultDataDir() string {
+	if base := os.Getenv("TENEX_BASE_DIR"); base != "" {
+		return filepath.Join(base, "relay", "data")
+	}
+	return expandPath("~/.tenex/relay/data")
+}
+
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
 		Port:        7777,
 		BindAddress: "127.0.0.1",
-		DataDir:     expandPath("~/.tenex/relay/data"),
+		DataDir:     defaultDataDir(),
 		NIP11: NIP11Config{
 			Name:          "TENEX Local Relay",
 			Description:   "Local Nostr relay for TENEX",

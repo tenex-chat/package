@@ -12,8 +12,7 @@ final class PendingEventsQueue: ObservableObject {
     private let logger = Logger(subsystem: "chat.tenex.launcher", category: "pending-events")
 
     private var pendingEventsPath: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".tenex")
+        ConfigStore.tenexDir
             .appendingPathComponent("relay")
             .appendingPathComponent("pending.json")
     }

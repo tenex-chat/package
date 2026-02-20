@@ -48,9 +48,7 @@ final class RelayManager: ObservableObject {
 
     // Directories
     private var relayDir: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".tenex")
-            .appendingPathComponent("relay")
+        ConfigStore.tenexDir.appendingPathComponent("relay")
     }
 
     private var dataDir: URL {
@@ -58,9 +56,7 @@ final class RelayManager: ObservableObject {
     }
 
     private var configPath: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".tenex")
-            .appendingPathComponent("relay.json")
+        ConfigStore.tenexDir.appendingPathComponent("relay.json")
     }
 
     // MARK: - Binary Location

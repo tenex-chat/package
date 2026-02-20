@@ -4,7 +4,13 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     case daemon = "Daemon"
     case providers = "Providers"
     case llms = "LLMs"
-    case config = "General"
+    case identity = "Identity"
+    case network = "Network"
+    case relay = "Relay"
+    case agents = "Agents"
+    case conversations = "Conversations"
+    case app = "App"
+    case prompt = "Prompt"
 
     var id: String { rawValue }
 
@@ -13,7 +19,13 @@ enum SidebarTab: String, CaseIterable, Identifiable {
         case .daemon: "bolt.fill"
         case .providers: "key.fill"
         case .llms: "cpu"
-        case .config: "gearshape"
+        case .identity: "person.text.rectangle"
+        case .network: "network"
+        case .relay: "dot.radiowaves.left.and.right"
+        case .agents: "person.2.fill"
+        case .conversations: "bubble.left.and.bubble.right"
+        case .app: "gearshape.2"
+        case .prompt: "text.bubble"
         }
     }
 }
@@ -21,6 +33,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
 struct MainWindow: View {
     @ObservedObject var daemon: DaemonManager
     @ObservedObject var configStore: ConfigStore
+    @ObservedObject var coreManager: TenexCoreManager
     @ObservedObject var relayManager: RelayManager
     @ObservedObject var negentropySync: NegentropySync
     @ObservedObject var pendingEventsQueue: PendingEventsQueue
@@ -30,7 +43,7 @@ struct MainWindow: View {
     var body: some View {
         Group {
             if configStore.needsOnboarding {
-                OnboardingView(store: configStore)
+                OnboardingView(store: configStore, coreManager: coreManager)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 NavigationSplitView {
@@ -48,12 +61,13 @@ struct MainWindow: View {
                         ProvidersView(store: configStore)
                     case .llms:
                         LLMsView(store: configStore)
-                    case .config:
+                    case .identity, .network, .relay, .agents, .conversations, .app, .prompt:
                         GeneralConfigView(
                             store: configStore,
                             relayManager: relayManager,
                             negentropySync: negentropySync,
-                            pendingEventsQueue: pendingEventsQueue
+                            pendingEventsQueue: pendingEventsQueue,
+                            tab: selectedTab
                         )
                     }
                 }

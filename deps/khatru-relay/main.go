@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 )
 
@@ -15,9 +16,16 @@ var (
 	Version = "dev"
 )
 
+func defaultConfigPath() string {
+	if base := os.Getenv("TENEX_BASE_DIR"); base != "" {
+		return filepath.Join(base, "relay.json")
+	}
+	return "~/.tenex/relay.json"
+}
+
 func main() {
 	// Command-line flags
-	configPath := flag.String("config", "~/.tenex/relay.json", "Path to configuration file")
+	configPath := flag.String("config", defaultConfigPath(), "Path to configuration file")
 	genConfig := flag.Bool("gen-config", false, "Generate a default configuration file and exit")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 

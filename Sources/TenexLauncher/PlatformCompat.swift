@@ -161,42 +161,6 @@ struct DictationOverlayView: View {
 }
 #endif
 
-// MARK: - AudioNotificationPlayer stub (excluded on macOS, uses AVAudioSession)
-
-import AVFoundation
-
-enum AudioPlaybackState {
-    case idle, playing, paused
-}
-
-enum AudioPlayerError: LocalizedError {
-    case initializationFailed, playbackFailed, noFileToReplay
-}
-
-@MainActor
-final class AudioNotificationPlayer: NSObject, ObservableObject {
-    @Published private(set) var playbackState: AudioPlaybackState = .idle
-    @Published private(set) var currentFileName: String?
-
-    var isPlaying: Bool { playbackState == .playing }
-    static let shared = AudioNotificationPlayer()
-
-    func play(filePath: URL) throws {}
-    func stop() {}
-    func togglePlayPause() {}
-    func replay() throws {}
-}
-
-struct AudioPlayingIndicator: View {
-    @ObservedObject var player = AudioNotificationPlayer.shared
-    var body: some View { EmptyView() }
-}
-
-struct AudioStatusBarView: View {
-    @ObservedObject var player = AudioNotificationPlayer.shared
-    var body: some View { EmptyView() }
-}
-
 // MARK: - iOS system colors → macOS NSColor equivalents
 
 extension NSColor {

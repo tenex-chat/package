@@ -86,12 +86,10 @@ struct TenexLauncherApp: App {
             }
             .onChange(of: isLoggedIn) { _, loggedIn in
                 if loggedIn {
-                    coreManager.clearLiveFeed()
                     coreManager.registerEventCallback()
                     Task { @MainActor in await coreManager.fetchData() }
                 } else {
                     coreManager.unregisterEventCallback()
-                    coreManager.clearLiveFeed()
                 }
             }
         }

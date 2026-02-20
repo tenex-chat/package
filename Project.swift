@@ -26,11 +26,16 @@ let project = Project(
                         "deps/tui/ios-app/Sources/TenexMVP/App.swift",
                         "deps/tui/ios-app/Sources/TenexMVP/Services/DictationManager.swift",
                         "deps/tui/ios-app/Sources/TenexMVP/Views/DictationOverlayView.swift",
-                        "deps/tui/ios-app/Sources/TenexMVP/Services/AudioNotificationPlayer.swift",
+                        // MainTabView uses Tab() API requiring macOS 15+; launcher provides its own
+                        "deps/tui/ios-app/Sources/TenexMVP/Navigation/MainTabView.swift",
+                        // AppRootSceneView depends on excluded AppSessionStore
+                        "deps/tui/ios-app/Sources/TenexMVP/Navigation/AppRootSceneView.swift",
+                        // AppSessionStore duplicates launcher's own login/session management
+                        "deps/tui/ios-app/Sources/TenexMVP/AppSession/AppSessionStore.swift",
                     ]
                 ),
-                // Rust FFI swift bindings
-                .glob("deps/tui/swift-bindings/tenex_core.swift"),
+
+
             ],
             resources: [
                 "deps/tui/ios-app/Sources/TenexMVP/Resources/**",

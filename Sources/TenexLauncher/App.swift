@@ -84,6 +84,12 @@ struct TenexLauncherApp: App {
                     attemptAutoLogin()
                 }
             }
+            .onChange(of: configStore.needsOnboarding) { _, needsOnboarding in
+                if !needsOnboarding {
+                    startLocalRelayIfNeeded()
+                    attemptAutoLogin()
+                }
+            }
             .onChange(of: isLoggedIn) { _, loggedIn in
                 if loggedIn {
                     coreManager.registerEventCallback()

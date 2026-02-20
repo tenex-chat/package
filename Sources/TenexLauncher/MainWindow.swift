@@ -43,7 +43,7 @@ struct MainWindow: View {
     var body: some View {
         Group {
             if configStore.needsOnboarding {
-                OnboardingView(store: configStore, coreManager: coreManager)
+                OnboardingView(store: configStore, coreManager: coreManager, relayManager: relayManager)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 NavigationSplitView {

@@ -24,6 +24,8 @@ struct LocalRelayConfig: Codable {
     var autoStart: Bool?
     var port: Int?
     var syncRelays: [String]?
+    var ngrokEnabled: Bool?
+    var ngrokUrl: String?
 }
 
 struct LoggingConfig: Codable {

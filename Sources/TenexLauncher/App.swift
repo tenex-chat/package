@@ -132,9 +132,8 @@ struct TenexLauncherApp: App {
 
         Task { @MainActor in
             let port = localRelay.port ?? 7777
-            let privacyMode = localRelay.privacyMode ?? false
 
-            relayManager.configure(port: port, privacyMode: privacyMode)
+            relayManager.configure(port: port)
             await relayManager.start()
 
             // If relay started successfully, start sync and drain pending events

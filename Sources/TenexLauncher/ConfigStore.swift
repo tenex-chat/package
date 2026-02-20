@@ -92,4 +92,14 @@ final class ConfigStore: ObservableObject {
     var llmsExist: Bool {
         FileManager.default.fileExists(atPath: Self.tenexDir.appendingPathComponent("llms.json").path)
     }
+
+    var tenexDirectoryExists: Bool {
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: Self.tenexDir.path, isDirectory: &isDirectory)
+        return exists && isDirectory.boolValue
+    }
+
+    var needsOnboarding: Bool {
+        !tenexDirectoryExists
+    }
 }

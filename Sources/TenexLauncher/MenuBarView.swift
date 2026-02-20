@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MenuBarView: View {
     @ObservedObject var daemon: DaemonManager
+    @ObservedObject var configStore: ConfigStore
     @ObservedObject var relayManager: RelayManager
     @ObservedObject var negentropySync: NegentropySync
     @Environment(\.openWindow) private var openWindow
@@ -71,6 +72,12 @@ struct MenuBarView: View {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q")
+        .task {
+            if configStore.needsOnboarding {
+                openWindow(id: "settings")
+                NSApplication.shared.activate(ignoringOtherApps: true)
+            }
+        }
     }
 
     private var daemonStatusColor: Color {

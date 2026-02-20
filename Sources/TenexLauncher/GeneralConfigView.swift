@@ -1,93 +1,36 @@
 import SwiftUI
 
-enum GeneralSettingsTab: String, CaseIterable, Identifiable {
-    case identity = "Identity"
-    case network = "Network"
-    case relay = "Relay"
-    case app = "App"
-    case prompt = "Prompt"
-
-    var id: String { rawValue }
-
-    var icon: String {
-        switch self {
-        case .identity: "person.text.rectangle"
-        case .network: "network"
-        case .relay: "dot.radiowaves.left.and.right"
-        case .app: "gearshape.2"
-        case .prompt: "text.bubble"
-        }
-    }
-}
-
 struct GeneralConfigView: View {
     @ObservedObject var store: ConfigStore
     @ObservedObject var relayManager: RelayManager
     @ObservedObject var negentropySync: NegentropySync
     @ObservedObject var pendingEventsQueue: PendingEventsQueue
-
-    @State private var selectedTab: GeneralSettingsTab = .identity
+    let tab: SidebarTab
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            settingsForm {
-                identitySection
-            }
-            .tabItem {
-                Label(GeneralSettingsTab.identity.rawValue, systemImage: GeneralSettingsTab.identity.icon)
-            }
-            .tag(GeneralSettingsTab.identity)
-
-            settingsForm {
-                networkSection
-            }
-            .tabItem {
-                Label(GeneralSettingsTab.network.rawValue, systemImage: GeneralSettingsTab.network.icon)
-            }
-            .tag(GeneralSettingsTab.network)
-
-            settingsForm {
-                localRelaySection
-            }
-            .tabItem {
-                Label(GeneralSettingsTab.relay.rawValue, systemImage: GeneralSettingsTab.relay.icon)
-            }
-            .tag(GeneralSettingsTab.relay)
-
-            settingsForm {
-                appSection
-            }
-            .tabItem {
-                Label(GeneralSettingsTab.app.rawValue, systemImage: GeneralSettingsTab.app.icon)
-            }
-            .tag(GeneralSettingsTab.app)
-
-            settingsForm {
-                globalSystemPromptSection
-            }
-            .tabItem {
-                Label(GeneralSettingsTab.prompt.rawValue, systemImage: GeneralSettingsTab.prompt.icon)
-            }
-            .tag(GeneralSettingsTab.prompt)
-        }
-        .navigationTitle("General")
-    }
-
-    private func settingsForm<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         Form {
-            content()
+            switch tab {
+            case .identity: identitySection
+            case .network: networkSection
+            case .relay: localRelaySection
+            case .agents: agentsSection
+            case .conversations: conversationsSection
+            case .app: appSection
+            case .prompt: globalSystemPromptSection
+            default: EmptyView()
+            }
         }
         .formStyle(.grouped)
+        .navigationTitle(tab.rawValue)
     }
 
     private var identitySection: some View {
-        Section("Identity") {
-            TextField("Backend Name", text: bound(\.backendName, default: "tenex backend"))
+        Group {
+            Section("Backend") {
+                TextField("Backend Name", text: bound(\.backendName, default: "tenex backend"))
+            }
 
-            VStack(alignment: .leading) {
-                Text("Whitelisted Pubkeys")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Section {
                 PubkeyListEditor(pubkeys: Binding(
                     get: { store.config.whitelistedPubkeys ?? [] },
                     set: {
@@ -95,6 +38,10 @@ struct GeneralConfigView: View {
                         store.saveConfig()
                     }
                 ))
+            } header: {
+                Text("Authorized Users")
+            } footer: {
+                Text("Nostr pubkeys authorized to use this TENEX instance. The backend only responds to messages from these users.")
             }
         }
     }
@@ -271,6 +218,264 @@ struct GeneralConfigView: View {
         }
     }
 
+    // MARK: - Agents
+
+    private var agentsSection: some View {
+        Group {
+            Section {
+                TextField("Agent Slug", text: escalationAgentBinding)
+            } header: {
+                Text("Escalation")
+            } footer: {
+                Text("Route ask() tool calls through this agent first. It acts as a first-line handler that can resolve questions without interrupting you.")
+            }
+
+            Section {
+                Toggle("Enable Intervention", isOn: interventionEnabledBinding)
+
+                if store.config.intervention?.enabled == true {
+                    TextField("Reviewer Agent Slug", text: interventionAgentBinding)
+
+                    DurationPicker(
+                        label: "Review Timeout",
+                        options: Self.timeoutOptionsMs,
+                        value: interventionReviewTimeoutBinding
+                    )
+
+                    DurationPicker(
+                        label: "Skip If Active Within",
+                        options: Self.skipActiveOptionsSeconds,
+                        value: interventionSkipIfActiveBinding
+                    )
+                }
+            } header: {
+                Text("Intervention")
+            } footer: {
+                Text("When an agent finishes work and you haven't responded within the timeout, another agent is assigned to review the results.")
+            }
+
+        }
+    }
+
+    // MARK: - Conversations
+
+    private var conversationsSection: some View {
+        Group {
+            Section {
+                Toggle("Enable Compression", isOn: compressionEnabledBinding)
+
+                if store.config.compression?.enabled != false {
+                    HStack {
+                        Text("Compress When Tokens Exceed")
+                        Spacer()
+                        TextField("", value: compressionThresholdBinding, format: .number)
+                            .frame(width: 80)
+                            .multilineTextAlignment(.trailing)
+                    }
+
+                    HStack {
+                        Text("Target Token Count")
+                        Spacer()
+                        TextField("", value: compressionBudgetBinding, format: .number)
+                            .frame(width: 80)
+                            .multilineTextAlignment(.trailing)
+                    }
+
+                    HStack {
+                        Text("Recent Messages to Preserve")
+                        Spacer()
+                        TextField("", value: compressionWindowBinding, format: .number)
+                            .frame(width: 80)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+            } header: {
+                Text("Compression")
+            } footer: {
+                Text("Automatically compresses conversation history when it grows too large, keeping context windows manageable.")
+            }
+
+            Section {
+                DurationPicker(
+                    label: "Inactivity Timeout",
+                    options: Self.summarizationTimeoutOptions,
+                    value: summarizationTimeoutBinding
+                )
+            } header: {
+                Text("Summarization")
+            } footer: {
+                Text("After this period of inactivity, a summary of the conversation is generated. Summaries help agents quickly understand past context.")
+            }
+        }
+    }
+
+    // MARK: - Duration Options
+
+    private static let timeoutOptionsMs: [(label: String, value: Int)] = [
+        ("1 minute", 60_000),
+        ("2 minutes", 120_000),
+        ("5 minutes", 300_000),
+        ("10 minutes", 600_000),
+        ("15 minutes", 900_000),
+    ]
+
+    private static let skipActiveOptionsSeconds: [(label: String, value: Int)] = [
+        ("30 seconds", 30),
+        ("1 minute", 60),
+        ("2 minutes", 120),
+        ("5 minutes", 300),
+        ("10 minutes", 600),
+    ]
+
+    private static let summarizationTimeoutOptions: [(label: String, value: Int)] = [
+        ("1 minute", 60_000),
+        ("2 minutes", 120_000),
+        ("5 minutes", 300_000),
+        ("10 minutes", 600_000),
+        ("15 minutes", 900_000),
+        ("30 minutes", 1_800_000),
+    ]
+
+    // MARK: - Agents Bindings
+
+    private var escalationAgentBinding: Binding<String> {
+        Binding(
+            get: { store.config.escalation?.agent ?? "" },
+            set: {
+                let value = $0.trimmingCharacters(in: .whitespaces)
+                if value.isEmpty {
+                    store.config.escalation = nil
+                } else {
+                    if store.config.escalation == nil {
+                        store.config.escalation = EscalationConfig()
+                    }
+                    store.config.escalation?.agent = value
+                }
+                store.saveConfig()
+            }
+        )
+    }
+
+    private var interventionEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.config.intervention?.enabled ?? false },
+            set: {
+                if store.config.intervention == nil {
+                    store.config.intervention = InterventionConfig()
+                }
+                store.config.intervention?.enabled = $0
+                if !$0 { store.config.intervention = nil }
+                store.saveConfig()
+            }
+        )
+    }
+
+    private var interventionAgentBinding: Binding<String> {
+        Binding(
+            get: { store.config.intervention?.agent ?? "" },
+            set: {
+                if store.config.intervention == nil {
+                    store.config.intervention = InterventionConfig(enabled: true)
+                }
+                store.config.intervention?.agent = $0.isEmpty ? nil : $0
+                store.saveConfig()
+            }
+        )
+    }
+
+    private var interventionReviewTimeoutBinding: Binding<Int> {
+        Binding(
+            get: { store.config.intervention?.reviewTimeout ?? 300_000 },
+            set: {
+                if store.config.intervention == nil {
+                    store.config.intervention = InterventionConfig(enabled: true)
+                }
+                store.config.intervention?.reviewTimeout = $0
+                store.saveConfig()
+            }
+        )
+    }
+
+    private var interventionSkipIfActiveBinding: Binding<Int> {
+        Binding(
+            get: { store.config.intervention?.skipIfActiveWithin ?? 120 },
+            set: {
+                if store.config.intervention == nil {
+                    store.config.intervention = InterventionConfig(enabled: true)
+                }
+                store.config.intervention?.skipIfActiveWithin = $0
+                store.saveConfig()
+            }
+        )
+    }
+
+    // MARK: - Conversations Bindings
+
+    private var compressionEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.config.compression?.enabled ?? true },
+            set: {
+                if store.config.compression == nil {
+                    store.config.compression = CompressionConfig()
+                }
+                store.config.compression?.enabled = $0
+                store.saveConfig()
+            }
+        )
+    }
+
+    private var compressionThresholdBinding: Binding<Int> {
+        Binding(
+            get: { store.config.compression?.tokenThreshold ?? 50_000 },
+            set: {
+                if store.config.compression == nil {
+                    store.config.compression = CompressionConfig()
+                }
+                store.config.compression?.tokenThreshold = $0
+                store.saveConfig()
+            }
+        )
+    }
+
+    private var compressionBudgetBinding: Binding<Int> {
+        Binding(
+            get: { store.config.compression?.tokenBudget ?? 40_000 },
+            set: {
+                if store.config.compression == nil {
+                    store.config.compression = CompressionConfig()
+                }
+                store.config.compression?.tokenBudget = $0
+                store.saveConfig()
+            }
+        )
+    }
+
+    private var compressionWindowBinding: Binding<Int> {
+        Binding(
+            get: { store.config.compression?.slidingWindowSize ?? 50 },
+            set: {
+                if store.config.compression == nil {
+                    store.config.compression = CompressionConfig()
+                }
+                store.config.compression?.slidingWindowSize = $0
+                store.saveConfig()
+            }
+        )
+    }
+
+    private var summarizationTimeoutBinding: Binding<Int> {
+        Binding(
+            get: { store.config.summarization?.inactivityTimeout ?? 300_000 },
+            set: {
+                if store.config.summarization == nil {
+                    store.config.summarization = SummarizationConfig()
+                }
+                store.config.summarization?.inactivityTimeout = $0
+                store.saveConfig()
+            }
+        )
+    }
+
     private func bound(_ keyPath: WritableKeyPath<TenexConfig, String?>, default defaultValue: String) -> Binding<String> {
         Binding(
             get: { store.config[keyPath: keyPath] ?? defaultValue },
@@ -405,6 +610,23 @@ struct PubkeyListEditor: View {
     private func truncated(_ key: String) -> String {
         guard key.count > 24 else { return key }
         return "\(key.prefix(12))...\(key.suffix(8))"
+    }
+}
+
+struct DurationPicker: View {
+    let label: String
+    let options: [(label: String, value: Int)]
+    @Binding var value: Int
+
+    var body: some View {
+        Picker(label, selection: $value) {
+            ForEach(options, id: \.value) { option in
+                Text(option.label).tag(option.value)
+            }
+            if !options.contains(where: { $0.value == value }) {
+                Text("Custom (\(value))").tag(value)
+            }
+        }
     }
 }
 

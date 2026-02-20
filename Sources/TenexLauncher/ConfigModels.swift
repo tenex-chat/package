@@ -14,8 +14,8 @@ struct TenexConfig: Codable {
     var globalSystemPrompt: GlobalSystemPrompt?
     var summarization: SummarizationConfig?
     var compression: CompressionConfig?
-    var claudeCode: ClaudeCodeConfig?
     var escalation: EscalationConfig?
+    var intervention: InterventionConfig?
     var localRelay: LocalRelayConfig?
 }
 
@@ -53,12 +53,15 @@ struct CompressionConfig: Codable {
     var slidingWindowSize: Int?
 }
 
-struct ClaudeCodeConfig: Codable {
-    var enableTenexTools: Bool?
-}
-
 struct EscalationConfig: Codable {
     var agent: String?
+}
+
+struct InterventionConfig: Codable {
+    var enabled: Bool?
+    var agent: String?
+    var reviewTimeout: Int?
+    var skipIfActiveWithin: Int?
 }
 
 // MARK: - providers.json

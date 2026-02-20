@@ -100,6 +100,6 @@ final class ConfigStore: ObservableObject {
     }
 
     var needsOnboarding: Bool {
-        !tenexDirectoryExists
+        !configExists
     }
 }

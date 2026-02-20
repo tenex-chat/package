@@ -18,6 +18,7 @@ struct TenexLauncherApp: App {
         MenuBarExtra {
             MenuBarView(
                 daemon: daemon,
+                configStore: configStore,
                 relayManager: relayManager,
                 negentropySync: negentropySync
             )
@@ -32,6 +33,7 @@ struct TenexLauncherApp: App {
             MainWindow(
                 daemon: daemon,
                 configStore: configStore,
+                coreManager: coreManager,
                 relayManager: relayManager,
                 negentropySync: negentropySync,
                 pendingEventsQueue: pendingEventsQueue

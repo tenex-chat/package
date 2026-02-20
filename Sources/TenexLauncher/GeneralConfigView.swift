@@ -1,150 +1,221 @@
 import SwiftUI
 
+enum GeneralSettingsTab: String, CaseIterable, Identifiable {
+    case identity = "Identity"
+    case network = "Network"
+    case relay = "Relay"
+    case app = "App"
+    case prompt = "Prompt"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .identity: "person.text.rectangle"
+        case .network: "network"
+        case .relay: "dot.radiowaves.left.and.right"
+        case .app: "gearshape.2"
+        case .prompt: "text.bubble"
+        }
+    }
+}
+
 struct GeneralConfigView: View {
     @ObservedObject var store: ConfigStore
     @ObservedObject var relayManager: RelayManager
     @ObservedObject var negentropySync: NegentropySync
     @ObservedObject var pendingEventsQueue: PendingEventsQueue
 
-    var body: some View {
-        Form {
-            Section("Identity") {
-                TextField("Backend Name", text: bound(\.backendName, default: "tenex backend"))
+    @State private var selectedTab: GeneralSettingsTab = .identity
 
-                VStack(alignment: .leading) {
-                    Text("Whitelisted Pubkeys")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    PubkeyListEditor(pubkeys: Binding(
-                        get: { store.config.whitelistedPubkeys ?? [] },
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            settingsForm {
+                identitySection
+            }
+            .tabItem {
+                Label(GeneralSettingsTab.identity.rawValue, systemImage: GeneralSettingsTab.identity.icon)
+            }
+            .tag(GeneralSettingsTab.identity)
+
+            settingsForm {
+                networkSection
+            }
+            .tabItem {
+                Label(GeneralSettingsTab.network.rawValue, systemImage: GeneralSettingsTab.network.icon)
+            }
+            .tag(GeneralSettingsTab.network)
+
+            settingsForm {
+                localRelaySection
+            }
+            .tabItem {
+                Label(GeneralSettingsTab.relay.rawValue, systemImage: GeneralSettingsTab.relay.icon)
+            }
+            .tag(GeneralSettingsTab.relay)
+
+            settingsForm {
+                appSection
+            }
+            .tabItem {
+                Label(GeneralSettingsTab.app.rawValue, systemImage: GeneralSettingsTab.app.icon)
+            }
+            .tag(GeneralSettingsTab.app)
+
+            settingsForm {
+                globalSystemPromptSection
+            }
+            .tabItem {
+                Label(GeneralSettingsTab.prompt.rawValue, systemImage: GeneralSettingsTab.prompt.icon)
+            }
+            .tag(GeneralSettingsTab.prompt)
+        }
+        .navigationTitle("General")
+    }
+
+    private func settingsForm<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        Form {
+            content()
+        }
+        .formStyle(.grouped)
+    }
+
+    private var identitySection: some View {
+        Section("Identity") {
+            TextField("Backend Name", text: bound(\.backendName, default: "tenex backend"))
+
+            VStack(alignment: .leading) {
+                Text("Whitelisted Pubkeys")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                PubkeyListEditor(pubkeys: Binding(
+                    get: { store.config.whitelistedPubkeys ?? [] },
+                    set: {
+                        store.config.whitelistedPubkeys = $0.isEmpty ? nil : $0
+                        store.saveConfig()
+                    }
+                ))
+            }
+        }
+    }
+
+    private var networkSection: some View {
+        Section("Network") {
+            VStack(alignment: .leading) {
+                Text("Relays")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                StringListEditor(
+                    items: Binding(
+                        get: { store.config.relays ?? ["wss://tenex.chat"] },
                         set: {
-                            store.config.whitelistedPubkeys = $0.isEmpty ? nil : $0
+                            store.config.relays = $0.isEmpty ? nil : $0
                             store.saveConfig()
                         }
-                    ))
-                }
+                    ),
+                    placeholder: "wss://relay.example.com"
+                )
             }
 
-            Section("Network") {
-                VStack(alignment: .leading) {
-                    Text("Relays")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    StringListEditor(
-                        items: Binding(
-                            get: { store.config.relays ?? ["wss://tenex.chat"] },
-                            set: {
-                                store.config.relays = $0.isEmpty ? nil : $0
-                                store.saveConfig()
-                            }
-                        ),
-                        placeholder: "wss://relay.example.com"
-                    )
-                }
+            TextField("Blossom Server URL", text: bound(\.blossomServerUrl, default: "https://blossom.primal.net"))
+        }
+    }
 
-                TextField("Blossom Server URL", text: bound(\.blossomServerUrl, default: "https://blossom.primal.net"))
-            }
+    private var localRelaySection: some View {
+        Section("Local Relay") {
+            Toggle("Enable Local Relay", isOn: localRelayEnabledBinding)
 
-            Section("Local Relay") {
-                Toggle("Enable Local Relay", isOn: localRelayEnabledBinding)
+            if store.config.localRelay?.enabled == true {
+                Toggle("Auto-start with app", isOn: localRelayAutoStartBinding)
 
-                if store.config.localRelay?.enabled == true {
-                    Toggle("Auto-start with app", isOn: localRelayAutoStartBinding)
-
-                    Toggle("Privacy Mode", isOn: privacyModeBinding)
-                        .help("When enabled, events are never sent to public relays. If the local relay fails, events are queued locally.")
-
-                    HStack {
-                        Text("Port")
-                        Spacer()
-                        TextField("Port", value: localRelayPortBinding, format: .number)
-                            .frame(width: 80)
-                            .multilineTextAlignment(.trailing)
-                            .disabled(relayManager.status == .running)
-                        if relayManager.status == .running {
-                            Text("(restart required)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    // Status indicator
-                    HStack {
-                        Text("Status")
-                        Spacer()
-                        LocalRelayStatusView(status: relayManager.status)
-                    }
-
-                    // Sync status
+                HStack {
+                    Text("Port")
+                    Spacer()
+                    TextField("Port", value: localRelayPortBinding, format: .number)
+                        .frame(width: 80)
+                        .multilineTextAlignment(.trailing)
+                        .disabled(relayManager.status == .running)
                     if relayManager.status == .running {
-                        HStack {
-                            Text("Sync")
-                            Spacer()
-                            Text(negentropySync.status.label)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        if let lastSync = negentropySync.lastSuccessfulSync {
-                            HStack {
-                                Text("Last Sync")
-                                Spacer()
-                                Text(lastSync, style: .relative)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-
-                    // Control buttons
-                    HStack {
-                        switch relayManager.status {
-                        case .stopped, .failed:
-                            Button("Start Relay") {
-                                Task {
-                                    relayManager.configure(
-                                        port: store.config.localRelay?.port ?? 7777,
-                                        privacyMode: store.config.localRelay?.privacyMode ?? false
-                                    )
-                                    await relayManager.start()
-                                    if relayManager.status == .running {
-                                        negentropySync.configure(
-                                            localRelayURL: relayManager.localRelayURL,
-                                            remoteRelays: store.config.localRelay?.syncRelays ?? ["wss://tenex.chat"],
-                                            relayManager: relayManager
-                                        )
-                                        negentropySync.start()
-
-                                        // Drain pending events after manual start (waits for queue to load first)
-                                        _ = await pendingEventsQueue.drainWhenReady(
-                                            relayURL: relayManager.localRelayURL
-                                        )
-                                    }
-                                }
-                            }
-                        case .starting:
-                            Button("Starting...") {}
-                                .disabled(true)
-                        case .running, .fallback:
-                            Button("Stop Relay") {
-                                negentropySync.stop()
-                                relayManager.stop()
-                            }
-
-                            Button("Sync Now") {
-                                Task {
-                                    await negentropySync.syncNow()
-                                }
-                            }
-                        }
-                    }
-
-                    if let error = relayManager.lastError {
-                        Text(error)
+                        Text("(restart required)")
                             .font(.caption)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(.secondary)
                     }
                 }
-            }
 
+                HStack {
+                    Text("Status")
+                    Spacer()
+                    LocalRelayStatusView(status: relayManager.status)
+                }
+
+                if relayManager.status == .running {
+                    HStack {
+                        Text("Sync")
+                        Spacer()
+                        Text(negentropySync.status.label)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let lastSync = negentropySync.lastSuccessfulSync {
+                        HStack {
+                            Text("Last Sync")
+                            Spacer()
+                            Text(lastSync, style: .relative)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                HStack {
+                    switch relayManager.status {
+                    case .stopped, .failed:
+                        Button("Start Relay") {
+                            Task {
+                                relayManager.configure(port: store.config.localRelay?.port ?? 7777)
+                                await relayManager.start()
+                                if relayManager.status == .running {
+                                    negentropySync.configure(
+                                        localRelayURL: relayManager.localRelayURL,
+                                        remoteRelays: store.config.localRelay?.syncRelays ?? ["wss://tenex.chat"],
+                                        relayManager: relayManager
+                                    )
+                                    negentropySync.start()
+
+                                    // Drain pending events after manual start (waits for queue to load first)
+                                    _ = await pendingEventsQueue.drainWhenReady(
+                                        relayURL: relayManager.localRelayURL
+                                    )
+                                }
+                            }
+                        }
+                    case .starting:
+                        Button("Starting...") {}
+                            .disabled(true)
+                    case .running:
+                        Button("Stop Relay") {
+                            negentropySync.stop()
+                            relayManager.stop()
+                        }
+
+                        Button("Sync Now") {
+                            Task {
+                                await negentropySync.syncNow()
+                            }
+                        }
+                    }
+                }
+
+                if let error = relayManager.lastError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+    }
+
+    private var appSection: some View {
+        Group {
             Section("Paths") {
                 TextField("Projects Base", text: bound(\.projectsBase, default: "~/tenex"))
             }
@@ -169,35 +240,35 @@ struct GeneralConfigView: View {
                     }
                 ))
             }
-
-            Section("Global System Prompt") {
-                Toggle("Enabled", isOn: Binding(
-                    get: { store.config.globalSystemPrompt?.enabled ?? false },
-                    set: {
-                        if store.config.globalSystemPrompt == nil {
-                            store.config.globalSystemPrompt = GlobalSystemPrompt()
-                        }
-                        store.config.globalSystemPrompt?.enabled = $0
-                        store.saveConfig()
-                    }
-                ))
-
-                TextEditor(text: Binding(
-                    get: { store.config.globalSystemPrompt?.content ?? "" },
-                    set: {
-                        if store.config.globalSystemPrompt == nil {
-                            store.config.globalSystemPrompt = GlobalSystemPrompt()
-                        }
-                        store.config.globalSystemPrompt?.content = $0.isEmpty ? nil : $0
-                        store.saveConfig()
-                    }
-                ))
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 100)
-            }
         }
-        .formStyle(.grouped)
-        .navigationTitle("General")
+    }
+
+    private var globalSystemPromptSection: some View {
+        Section("Global System Prompt") {
+            Toggle("Enabled", isOn: Binding(
+                get: { store.config.globalSystemPrompt?.enabled ?? false },
+                set: {
+                    if store.config.globalSystemPrompt == nil {
+                        store.config.globalSystemPrompt = GlobalSystemPrompt()
+                    }
+                    store.config.globalSystemPrompt?.enabled = $0
+                    store.saveConfig()
+                }
+            ))
+
+            TextEditor(text: Binding(
+                get: { store.config.globalSystemPrompt?.content ?? "" },
+                set: {
+                    if store.config.globalSystemPrompt == nil {
+                        store.config.globalSystemPrompt = GlobalSystemPrompt()
+                    }
+                    store.config.globalSystemPrompt?.content = $0.isEmpty ? nil : $0
+                    store.saveConfig()
+                }
+            ))
+            .font(.system(.body, design: .monospaced))
+            .frame(minHeight: 100)
+        }
     }
 
     private func bound(_ keyPath: WritableKeyPath<TenexConfig, String?>, default defaultValue: String) -> Binding<String> {
@@ -251,23 +322,6 @@ struct GeneralConfigView: View {
         )
     }
 
-    private var privacyModeBinding: Binding<Bool> {
-        Binding(
-            get: { store.config.localRelay?.privacyMode ?? false },
-            set: {
-                if store.config.localRelay == nil {
-                    store.config.localRelay = LocalRelayConfig()
-                }
-                store.config.localRelay?.privacyMode = $0
-                relayManager.configure(
-                    port: store.config.localRelay?.port ?? 7777,
-                    privacyMode: $0
-                )
-                store.saveConfig()
-            }
-        )
-    }
-
     private var localRelayPortBinding: Binding<Int> {
         Binding(
             get: { store.config.localRelay?.port ?? 7777 },
@@ -303,7 +357,6 @@ struct LocalRelayStatusView: View {
         case .starting: .yellow
         case .stopped: .gray
         case .failed: .red
-        case .fallback: .orange
         }
     }
 }

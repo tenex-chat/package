@@ -28,28 +28,35 @@ struct MainWindow: View {
     @State private var selectedTab: SidebarTab = .daemon
 
     var body: some View {
-        NavigationSplitView {
-            List(SidebarTab.allCases, selection: $selectedTab) { tab in
-                Label(tab.rawValue, systemImage: tab.icon)
-                    .tag(tab)
-            }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 160, ideal: 180)
-        } detail: {
-            switch selectedTab {
-            case .daemon:
-                DaemonView(daemon: daemon)
-            case .providers:
-                ProvidersView(store: configStore)
-            case .llms:
-                LLMsView(store: configStore)
-            case .config:
-                GeneralConfigView(
-                    store: configStore,
-                    relayManager: relayManager,
-                    negentropySync: negentropySync,
-                    pendingEventsQueue: pendingEventsQueue
-                )
+        Group {
+            if configStore.needsOnboarding {
+                OnboardingView(store: configStore)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                NavigationSplitView {
+                    List(SidebarTab.allCases, selection: $selectedTab) { tab in
+                        Label(tab.rawValue, systemImage: tab.icon)
+                            .tag(tab)
+                    }
+                    .listStyle(.sidebar)
+                    .navigationSplitViewColumnWidth(min: 160, ideal: 180)
+                } detail: {
+                    switch selectedTab {
+                    case .daemon:
+                        DaemonView(daemon: daemon)
+                    case .providers:
+                        ProvidersView(store: configStore)
+                    case .llms:
+                        LLMsView(store: configStore)
+                    case .config:
+                        GeneralConfigView(
+                            store: configStore,
+                            relayManager: relayManager,
+                            negentropySync: negentropySync,
+                            pendingEventsQueue: pendingEventsQueue
+                        )
+                    }
+                }
             }
         }
     }

@@ -88,7 +88,6 @@ struct MenuBarView: View {
         case .starting: .yellow
         case .stopped: .gray
         case .failed: .red
-        case .fallback: .orange
         }
     }
 

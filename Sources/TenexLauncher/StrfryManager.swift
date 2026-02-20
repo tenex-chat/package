@@ -6,7 +6,6 @@ enum StrfryStatus: Equatable {
     case starting
     case running
     case failed
-    case fallback  // Using remote relay due to local failure
 
     var label: String {
         switch self {
@@ -14,12 +13,11 @@ enum StrfryStatus: Equatable {
         case .starting: "Starting..."
         case .running: "Running"
         case .failed: "Failed"
-        case .fallback: "Fallback"
         }
     }
 
     var isOperational: Bool {
-        self == .running || self == .fallback
+        self == .running
     }
 }
 
@@ -46,7 +44,6 @@ final class StrfryManager: ObservableObject {
 
     // Configuration
     private(set) var port: Int = 7777
-    private(set) var privacyMode: Bool = false
 
     // Directories
     private var relayDir: URL {
@@ -97,9 +94,8 @@ final class StrfryManager: ObservableObject {
 
     // MARK: - Configuration
 
-    func configure(port: Int, privacyMode: Bool) {
+    func configure(port: Int) {
         self.port = port
-        self.privacyMode = privacyMode
     }
 
     // MARK: - Lifecycle
@@ -336,15 +332,7 @@ final class StrfryManager: ObservableObject {
     private func handleFailure(reason: String) {
         lastError = reason
         logger.error("strfry failure: \(reason)")
-
-        if privacyMode {
-            // In privacy mode, don't fallback - stay failed
-            status = .failed
-        } else {
-            // Fallback to remote relay
-            status = .fallback
-            logger.info("Falling back to remote relay")
-        }
+        status = .failed
     }
 
     // MARK: - Port Check
@@ -404,19 +392,12 @@ final class StrfryManager: ObservableObject {
         "ws://127.0.0.1:\(port)"
     }
 
-    /// Returns the effective relay URL to use (local if running, fallback otherwise)
-    func effectiveRelayURL(fallbackRelay: String = "wss://tenex.chat") -> String {
-        switch status {
-        case .running:
-            return localRelayURL
-        case .fallback:
-            return fallbackRelay
-        default:
-            return fallbackRelay
-        }
+    /// Returns the effective relay URL to use (local relay only)
+    func effectiveRelayURL() -> String {
+        localRelayURL
     }
 
-    // MARK: - Privacy Mode Event Queuing
+    // MARK: - Event Queuing
     //
     // TODO: PRIVACY MODE WIRING REQUIRED
     //
@@ -465,13 +446,13 @@ final class StrfryManager: ObservableObject {
     ///
     /// - Warning: This property is not yet wired to TenexCore. See TODO above for integration steps.
     var shouldQueueEvents: Bool {
-        privacyMode && status != .running
+        status != .running
     }
 
-    /// Determines if events can be published (either local relay running or fallback allowed)
+    /// Determines if events can be published (local relay must be running)
     ///
     /// - Warning: This property is not yet wired to TenexCore. See TODO above for integration steps.
     var canPublishEvents: Bool {
-        status == .running || (!privacyMode && status == .fallback)
+        status == .running
     }
 }

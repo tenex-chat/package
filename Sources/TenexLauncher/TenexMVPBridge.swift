@@ -14,6 +14,13 @@ enum AutoLoginResult {
     case transientError(error: String)
 }
 
+// MARK: - Streaming Buffer
+
+struct StreamingBuffer {
+    let agentPubkey: String
+    var text: String
+}
+
 // MARK: - Profile Picture Cache
 
 final class ProfilePictureCache {
@@ -75,6 +82,7 @@ class TenexCoreManager: ObservableObject {
     @Published var projectOnlineStatus: [String: Bool] = [:]
     @Published var onlineAgents: [String: [OnlineAgentInfo]] = [:]
     @Published var hasActiveAgents: Bool = false
+    @Published var streamingBuffers: [String: StreamingBuffer] = [:]
 
     private var eventHandler: TenexEventHandler?
     private var projectStatusUpdateTask: Task<Void, Never>?
@@ -438,6 +446,14 @@ class TenexCoreManager: ObservableObject {
         profilePictureCache.clear()
         let result = await KeychainService.shared.deleteNsecAsync()
         switch result { case .success: return nil; case .failure(let error): return error.localizedDescription }
+    }
+
+    @MainActor
+    func applyStreamChunk(agentPubkey: String, conversationId: String, textDelta: String?) {
+        guard let delta = textDelta, !delta.isEmpty else { return }
+        var buffer = streamingBuffers[conversationId] ?? StreamingBuffer(agentPubkey: agentPubkey, text: "")
+        buffer.text.append(delta)
+        streamingBuffers[conversationId] = buffer
     }
 }
 

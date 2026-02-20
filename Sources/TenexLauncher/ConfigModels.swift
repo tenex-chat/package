@@ -22,7 +22,6 @@ struct TenexConfig: Codable {
 struct LocalRelayConfig: Codable {
     var enabled: Bool?
     var autoStart: Bool?
-    var privacyMode: Bool?
     var port: Int?
     var syncRelays: [String]?
 }

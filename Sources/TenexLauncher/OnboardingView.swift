@@ -19,9 +19,12 @@ struct OnboardingView: View {
     @State private var identityNpub = ""
     @State private var identityHexPubkey = ""
     @State private var generatedNsec = ""
-    @State private var confirmedSavedKey = false
     @State private var isProcessing = false
     @State private var identityCompleted = false
+    @State private var displayName = ""
+    @State private var selectedAvatarStyle = ""
+
+    private let avatarStyles = ["lorelei", "miniavs", "dylan", "pixel-art", "rings", "avataaars"]
 
     enum IdentityPath {
         case none
@@ -197,11 +200,56 @@ struct OnboardingView: View {
         }
     }
 
+    private func defaultAvatarStyle(for pubkey: String) -> String {
+        let prefix = String(pubkey.prefix(8))
+        let index = (UInt64(prefix, radix: 16) ?? 0) % UInt64(avatarStyles.count)
+        return avatarStyles[Int(index)]
+    }
+
+    private func avatarURL(style: String, pubkey: String) -> String {
+        "https://api.dicebear.com/7.x/\(style)/png?seed=\(pubkey)"
+    }
+
     private var createKeyView: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Your new Nostr identity")
                 .font(.headline)
 
+            // Name field
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Display name")
+                    .font(.subheadline.weight(.medium))
+                TextField("Your name", text: $displayName)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            // Avatar picker
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Choose your avatar")
+                    .font(.subheadline.weight(.medium))
+
+                HStack(spacing: 12) {
+                    ForEach(avatarStyles, id: \.self) { style in
+                        AsyncImage(url: URL(string: avatarURL(style: style, pubkey: identityHexPubkey))) { image in
+                            image.resizable()
+                        } placeholder: {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(.quaternary)
+                        }
+                        .frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(selectedAvatarStyle == style ? Color.accentColor : .clear, lineWidth: 3)
+                        )
+                        .onTapGesture {
+                            selectedAvatarStyle = style
+                        }
+                    }
+                }
+            }
+
+            // Keys display
             VStack(alignment: .leading, spacing: 8) {
                 Text("Your secret key (nsec)")
                     .font(.subheadline.weight(.medium))
@@ -241,15 +289,14 @@ struct OnboardingView: View {
                     .background(RoundedRectangle(cornerRadius: 6).fill(.background.secondary))
             }
 
-            Toggle("I've saved my secret key somewhere safe", isOn: $confirmedSavedKey)
-
             HStack {
                 Button("Back") {
                     identityPath = .none
                     generatedNsec = ""
                     identityNpub = ""
                     identityHexPubkey = ""
-                    confirmedSavedKey = false
+                    displayName = ""
+                    selectedAvatarStyle = ""
                 }
 
                 Spacer()
@@ -258,7 +305,7 @@ struct OnboardingView: View {
                     storeKeyAndComplete()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(!confirmedSavedKey || isProcessing)
+                .disabled(displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessing)
             }
         }
     }
@@ -307,6 +354,7 @@ struct OnboardingView: View {
                     generatedNsec = keypair.nsec
                     identityNpub = keypair.npub
                     identityHexPubkey = keypair.pubkeyHex
+                    selectedAvatarStyle = defaultAvatarStyle(for: keypair.pubkeyHex)
                     identityPath = .create
                     isProcessing = false
                 }
@@ -394,6 +442,13 @@ struct OnboardingView: View {
                 if !pubkeys.contains(identityHexPubkey) {
                     pubkeys.append(identityHexPubkey)
                     store.config.whitelistedPubkeys = pubkeys
+                }
+
+                // Publish profile if name was provided (create flow)
+                let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmedName.isEmpty {
+                    let pictureUrl = selectedAvatarStyle.isEmpty ? nil : avatarURL(style: selectedAvatarStyle, pubkey: identityHexPubkey)
+                    try? coreManager.core.publishProfile(name: trimmedName, pictureUrl: pictureUrl)
                 }
 
                 identityCompleted = true

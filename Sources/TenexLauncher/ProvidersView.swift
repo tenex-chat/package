@@ -27,6 +27,12 @@ private let settingsProviderDisplayNames: [String: String] = [
     "codex-app-server": "Codex App Server",
 ]
 
+private let apiKeyEnvVars: [String: String] = [
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+]
+
 struct ProvidersView: View {
     @ObservedObject var store: ConfigStore
 
@@ -41,12 +47,14 @@ struct ProvidersView: View {
             providerCard(
                 title: "Providers",
                 rows: providerListOrder.map { provider in
-                    SettingsProviderRowData(
+                    let connected = isConnected(provider)
+                    return SettingsProviderRowData(
                         id: provider,
                         name: settingsProviderDisplayNames[provider] ?? provider,
                         subtitle: subtitle(for: provider),
                         iconSystemName: iconName(for: provider),
-                        buttonLabel: isConnected(provider) ? "Disconnect" : "Connect",
+                        isConnected: connected,
+                        buttonLabel: connected ? "Disconnect" : "Connect",
                         buttonDisabled: buttonDisabled(for: provider)
                     )
                 },
@@ -64,6 +72,7 @@ struct ProvidersView: View {
         .navigationTitle("Providers")
         .task {
             await detectLocalAvailability()
+            autoConnectDetected()
         }
         .sheet(isPresented: $showCredentialSheet) {
             providerCredentialSheet
@@ -224,6 +233,29 @@ struct ProvidersView: View {
         providerAvailability = availability
     }
 
+    private func autoConnectDetected() {
+        // Auto-connect local command providers that are available
+        for (provider, _) in localCommandProviders {
+            if providerAvailability[provider] == true && !isConnected(provider) {
+                store.providers.providers[provider] = ProviderEntry(apiKey: "none")
+            }
+        }
+
+        // Auto-connect ollama if available
+        if providerAvailability["ollama"] == true && !isConnected("ollama") {
+            store.providers.providers["ollama"] = ProviderEntry(apiKey: "http://localhost:11434")
+        }
+
+        // Auto-connect API key providers from env vars
+        for (provider, envVar) in apiKeyEnvVars {
+            if !isConnected(provider), let apiKey = ProcessInfo.processInfo.environment[envVar], !apiKey.isEmpty {
+                store.providers.providers[provider] = ProviderEntry(apiKey: apiKey)
+            }
+        }
+
+        store.saveProviders()
+    }
+
     private static func commandExists(_ command: String) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -270,8 +302,15 @@ struct ProvidersView: View {
                             .frame(width: 24)
                             .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(row.name)
-                                .font(.body.weight(.medium))
+                            HStack(spacing: 6) {
+                                Text(row.name)
+                                    .font(.body.weight(.medium))
+                                if row.isConnected {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                        .font(.body)
+                                }
+                            }
                             Text(row.subtitle)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -306,6 +345,7 @@ private struct SettingsProviderRowData {
     let name: String
     let subtitle: String
     let iconSystemName: String
+    let isConnected: Bool
     let buttonLabel: String?
     let buttonDisabled: Bool
 }

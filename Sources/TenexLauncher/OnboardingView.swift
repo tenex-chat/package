@@ -1,15 +1,23 @@
 import SwiftUI
+import AppKit
 
 struct OnboardingView: View {
     @ObservedObject var store: ConfigStore
     @ObservedObject var coreManager: TenexCoreManager
+    @ObservedObject var relayManager: RelayManager
 
     @State private var step: OnboardingStep = .identity
 
     enum OnboardingStep {
         case identity
+        case relay
         case providers
         case llms
+    }
+
+    enum RelayMode {
+        case remote
+        case local
     }
 
     // Identity state
@@ -21,10 +29,23 @@ struct OnboardingView: View {
     @State private var generatedNsec = ""
     @State private var isProcessing = false
     @State private var identityCompleted = false
-    @State private var displayName = ""
+    @State private var displayName = NSFullUserName().isEmpty ? NSUserName() : NSFullUserName()
     @State private var selectedAvatarStyle = ""
 
-    private let avatarStyles = ["lorelei", "miniavs", "dylan", "pixel-art", "rings", "avataaars"]
+    private let avatarStyles = [
+        "lorelei", "miniavs", "dylan", "pixel-art", "rings", "avataaars",
+        "adventurer", "adventurer-neutral", "big-ears", "big-ears-neutral",
+        "bottts", "bottts-neutral", "croodles", "croodles-neutral",
+        "fun-emoji", "icons", "identicon", "micah", "notionists",
+        "notionists-neutral", "open-peeps", "personas", "shapes", "thumbs"
+    ]
+    @State private var avatarWindowStart = 0
+
+    // Relay state
+    @State private var relayMode: RelayMode = .remote
+    @State private var remoteRelayURL = "wss://tenex.chat"
+    @State private var ngrokAvailable = false
+    @State private var ngrokEnabled = false
 
     enum IdentityPath {
         case none
@@ -50,6 +71,8 @@ struct OnboardingView: View {
                 switch step {
                 case .identity:
                     identityStepView
+                case .relay:
+                    relayStepView
                 case .providers:
                     ProvidersView(store: store)
                 case .llms:
@@ -66,7 +89,8 @@ struct OnboardingView: View {
                     Button("Back") {
                         switch step {
                         case .llms: step = .providers
-                        case .providers: step = .identity
+                        case .providers: step = .relay
+                        case .relay: step = .identity
                         case .identity: break
                         }
                     }
@@ -76,19 +100,28 @@ struct OnboardingView: View {
 
                 switch step {
                 case .identity:
+                    if identityCompleted {
+                        Button("Continue") {
+                            step = .relay
+                        }
+                        .keyboardShortcut(.defaultAction)
+                    }
+                case .relay:
                     Button("Continue") {
+                        saveRelayConfig()
                         step = .providers
                     }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!identityCompleted)
                 case .providers:
                     Button("Continue") {
+                        seedDefaultLLMConfigs()
                         step = .llms
                     }
                     .keyboardShortcut(.defaultAction)
                     .disabled(store.providers.providers.isEmpty)
                 case .llms:
                     Button("Finish Setup") {
+                        generateBackendKeyAndApprove()
                         store.saveConfig()
                     }
                     .keyboardShortcut(.defaultAction)
@@ -96,12 +129,23 @@ struct OnboardingView: View {
             }
             .padding(24)
         }
+        .onAppear {
+            DispatchQueue.main.async {
+                if let window = NSApplication.shared.windows.first(where: { $0.title == "TENEX Settings" }) {
+                    let size = NSSize(width: 580, height: 540)
+                    window.setContentSize(size)
+                    window.center()
+                }
+            }
+        }
     }
 
     private var headerSubtitle: String {
         switch step {
         case .identity:
             "Set up your Nostr identity to get started."
+        case .relay:
+            "Choose how to connect to the Nostr network."
         case .providers:
             "Connect your AI providers."
         case .llms:
@@ -200,10 +244,10 @@ struct OnboardingView: View {
         }
     }
 
-    private func defaultAvatarStyle(for pubkey: String) -> String {
+    private func defaultAvatarStyle(for pubkey: String) -> (String, Int) {
         let prefix = String(pubkey.prefix(8))
-        let index = (UInt64(prefix, radix: 16) ?? 0) % UInt64(avatarStyles.count)
-        return avatarStyles[Int(index)]
+        let index = Int((UInt64(prefix, radix: 16) ?? 0) % UInt64(avatarStyles.count))
+        return (avatarStyles[index], index)
     }
 
     private func avatarURL(style: String, pubkey: String) -> String {
@@ -228,8 +272,17 @@ struct OnboardingView: View {
                 Text("Choose your avatar")
                     .font(.subheadline.weight(.medium))
 
-                HStack(spacing: 12) {
-                    ForEach(avatarStyles, id: \.self) { style in
+                HStack(spacing: 8) {
+                    Button {
+                        avatarWindowStart = (avatarWindowStart - 6 + avatarStyles.count) % avatarStyles.count
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.title3)
+                    }
+                    .buttonStyle(.borderless)
+
+                    ForEach(0..<6, id: \.self) { offset in
+                        let style = avatarStyles[(avatarWindowStart + offset) % avatarStyles.count]
                         AsyncImage(url: URL(string: avatarURL(style: style, pubkey: identityHexPubkey))) { image in
                             image.resizable()
                         } placeholder: {
@@ -246,6 +299,14 @@ struct OnboardingView: View {
                             selectedAvatarStyle = style
                         }
                     }
+
+                    Button {
+                        avatarWindowStart = (avatarWindowStart + 6) % avatarStyles.count
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.title3)
+                    }
+                    .buttonStyle(.borderless)
                 }
             }
 
@@ -343,7 +404,144 @@ struct OnboardingView: View {
         }
     }
 
+    // MARK: - Relay Step
+
+    private var relayStepView: some View {
+        VStack(spacing: 24) {
+            HStack(spacing: 16) {
+                relayCard(
+                    icon: "globe",
+                    title: "Remote Relay",
+                    description: "Connect to a relay server. Works from any device.",
+                    selected: relayMode == .remote
+                ) {
+                    relayMode = .remote
+                }
+
+                relayCard(
+                    icon: "server.rack",
+                    title: "Local Relay",
+                    description: "Run a relay on this machine. Data stays local.",
+                    selected: relayMode == .local
+                ) {
+                    relayMode = .local
+                }
+            }
+            .padding(.horizontal, 24)
+
+            if relayMode == .remote {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Relay URL")
+                        .font(.subheadline.weight(.medium))
+                    TextField("wss://tenex.chat", text: $remoteRelayURL)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                }
+                .frame(maxWidth: 400)
+                .padding(.horizontal, 24)
+            }
+
+            if relayMode == .local {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Toggle(isOn: $ngrokEnabled) {
+                            Text("Expose via ngrok for mobile access")
+                        }
+                        .disabled(!ngrokAvailable)
+
+                        if !ngrokAvailable {
+                            Text("(ngrok not installed)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .frame(maxWidth: 400)
+                .padding(.horizontal, 24)
+            }
+
+            Spacer()
+        }
+        .padding(.top, 24)
+        .onAppear { detectNgrok() }
+    }
+
+    private func relayCard(
+        icon: String,
+        title: String,
+        description: String,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 32))
+                    .foregroundStyle(selected ? Color.accentColor : .secondary)
+
+                Text(title)
+                    .font(.headline)
+
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(20)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.background.secondary)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(selected ? Color.accentColor : .clear, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func detectNgrok() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        process.arguments = ["ngrok"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        try? process.run()
+        process.waitUntilExit()
+        ngrokAvailable = process.terminationStatus == 0
+    }
+
+    private func saveRelayConfig() {
+        switch relayMode {
+        case .remote:
+            store.config.relays = [remoteRelayURL]
+            store.config.localRelay = LocalRelayConfig(enabled: false)
+        case .local:
+            store.config.localRelay = LocalRelayConfig(
+                enabled: true,
+                autoStart: true,
+                port: 7777,
+                syncRelays: ["wss://tenex.chat"],
+                ngrokEnabled: ngrokEnabled
+            )
+        }
+    }
+
     // MARK: - Actions
+
+    private func generateBackendKeyAndApprove() {
+        // Generate a keypair for the backend if one doesn't exist
+        if store.config.tenexPrivateKey == nil {
+            guard let keypair = try? coreManager.core.generateKeypair() else { return }
+            guard let hexPrivateKey = Bech32.nsecToHex(keypair.nsec) else { return }
+            store.config.tenexPrivateKey = hexPrivateKey
+
+            // Approve the backend in the client
+            try? coreManager.core.approveBackend(pubkey: keypair.pubkeyHex)
+        }
+    }
 
     private func generateNewKeypair() {
         isProcessing = true
@@ -354,7 +552,9 @@ struct OnboardingView: View {
                     generatedNsec = keypair.nsec
                     identityNpub = keypair.npub
                     identityHexPubkey = keypair.pubkeyHex
-                    selectedAvatarStyle = defaultAvatarStyle(for: keypair.pubkeyHex)
+                    let (style, index) = defaultAvatarStyle(for: keypair.pubkeyHex)
+                    selectedAvatarStyle = style
+                    avatarWindowStart = index
                     identityPath = .create
                     isProcessing = false
                 }
@@ -454,6 +654,67 @@ struct OnboardingView: View {
                 identityCompleted = true
                 isProcessing = false
             }
+        }
+    }
+
+    // MARK: - Default LLM Seeding
+
+    private func seedDefaultLLMConfigs() {
+        guard store.llms.configurations.isEmpty else { return }
+
+        let connected = Set(store.providers.providers.keys)
+
+        // Prefer claude-code (local CLI), fall back to anthropic API key
+        let anthropicProvider: String? = if connected.contains("claude-code") {
+            "claude-code"
+        } else if connected.contains("anthropic") {
+            "anthropic"
+        } else {
+            nil
+        }
+
+        if let provider = anthropicProvider {
+            store.llms.configurations["Sonnet"] = .standard(
+                StandardLLM(provider: provider, model: "claude-sonnet-4-6")
+            )
+            store.llms.configurations["Opus"] = .standard(
+                StandardLLM(provider: provider, model: "claude-opus-4-6")
+            )
+            store.llms.configurations["Auto"] = .meta(MetaLLM(
+                provider: "meta",
+                variants: [
+                    "fast": MetaVariant(
+                        model: "claude-haiku-4-5-20251001",
+                        description: "Fast, lightweight tasks",
+                        tier: 1
+                    ),
+                    "balanced": MetaVariant(
+                        model: "claude-sonnet-4-6",
+                        description: "Good balance of speed and capability",
+                        tier: 2
+                    ),
+                    "powerful": MetaVariant(
+                        model: "claude-opus-4-6",
+                        description: "Most capable, complex reasoning",
+                        tier: 3
+                    ),
+                ],
+                defaultVariant: "balanced"
+            ))
+            store.llms.default = "Auto"
+        }
+
+        if connected.contains("openai") {
+            store.llms.configurations["GPT-4o"] = .standard(
+                StandardLLM(provider: "openai", model: "gpt-4o")
+            )
+            if anthropicProvider == nil {
+                store.llms.default = "GPT-4o"
+            }
+        }
+
+        if !store.llms.configurations.isEmpty {
+            store.saveLLMs()
         }
     }
 }

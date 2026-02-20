@@ -18,14 +18,13 @@ import (
 
 // Relay wraps a Khatru relay with TENEX-specific configuration
 type Relay struct {
-	config       *Config
-	khatru       *khatru.Relay
-	server       *http.Server
-	storage      *Storage
+	config  *Config
+	khatru  *khatru.Relay
+	server  *http.Server
+	storage *Storage
 
 	mu        sync.RWMutex
 	startTime time.Time
-	eventCount int64
 }
 
 // NewRelay creates a new relay with the given configuration
@@ -94,10 +93,22 @@ func NewRelay(config *Config) (*Relay, error) {
 						if err := storage.DeleteEvent(ctx, targetEvent); err != nil {
 							log.Printf("NIP-9: failed to delete event %s: %v", targetID, err)
 						} else {
-							log.Printf("NIP-9: deleted event %s (requested by %s...)", targetID[:12], event.PubKey[:12])
+							targetIDLog := targetID
+							if len(targetIDLog) > 12 {
+								targetIDLog = targetIDLog[:12]
+							}
+							pubKeyLog := event.PubKey
+							if len(pubKeyLog) > 12 {
+								pubKeyLog = pubKeyLog[:12]
+							}
+							log.Printf("NIP-9: deleted event %s (requested by %s...)", targetIDLog, pubKeyLog)
 						}
 					} else {
-						log.Printf("NIP-9: ignoring deletion request for %s (pubkey mismatch)", targetID[:12])
+						targetIDLog := targetID
+						if len(targetIDLog) > 12 {
+							targetIDLog = targetIDLog[:12]
+						}
+						log.Printf("NIP-9: ignoring deletion request for %s (pubkey mismatch)", targetIDLog)
 					}
 				}
 			}
@@ -110,6 +121,13 @@ func NewRelay(config *Config) (*Relay, error) {
 		policies.RestrictToSpecifiedKinds(
 			false, // Not restrictive - allow all kinds
 		),
+		// Enforce MaxContentLength
+		func(ctx context.Context, event *nostr.Event) (reject bool, msg string) {
+			if len(event.Content) > config.Limits.MaxContentLength {
+				return true, fmt.Sprintf("content too large: %d > %d bytes", len(event.Content), config.Limits.MaxContentLength)
+			}
+			return false, ""
+		},
 	)
 
 	// Allow all connections (local relay, trust local network)
@@ -150,7 +168,7 @@ func (r *Relay) Start(ctx context.Context) error {
 	mux.Handle("/", r.khatru)
 
 	// Create server
-	addr := fmt.Sprintf("127.0.0.1:%d", r.config.Port)
+	addr := fmt.Sprintf("%s:%d", r.config.BindAddress, r.config.Port)
 	r.server = &http.Server{
 		Addr:         addr,
 		Handler:      mux,
@@ -220,7 +238,7 @@ func (r *Relay) handleStats(w http.ResponseWriter, req *http.Request) {
 	uptime := time.Since(r.startTime)
 	r.mu.RUnlock()
 
-	count, _ := r.storage.CountEvents(context.Background(), nostr.Filter{})
+	count, _ := r.storage.CountEvents(req.Context(), nostr.Filter{})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

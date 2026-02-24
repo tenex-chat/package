@@ -101,7 +101,7 @@ struct UIApplicationShim {
 }
 #endif
 
-// MARK: - DictationManager stub (iOS Speech APIs unavailable on macOS 14)
+// MARK: - DictationManager stub (iOS-only, macOS needs a stub)
 
 @MainActor
 @Observable
@@ -125,19 +125,27 @@ final class DictationManager {
     private(set) var finalText: String = ""
     private(set) var error: String?
 
-    let phoneticLearner = PhoneticLearner()
+    func startRecording() async throws {
+        error = "Voice dictation is not available on macOS"
+    }
 
-    func startRecording() async throws {}
-    func stopRecording() {}
-    func cancelRecording() {}
-    func reset() {
+    func stopRecording() async {
         state = .idle
+    }
+
+    func cancelRecording() {
         finalText = ""
+        state = .idle
+    }
+
+    func reset() {
+        finalText = ""
+        state = .idle
         error = nil
     }
 }
 
-// MARK: - DictationOverlayView stub
+// MARK: - DictationOverlayView stub (iOS-only view, macOS needs a stub)
 
 struct DictationOverlayView: View {
     @Bindable var manager: DictationManager

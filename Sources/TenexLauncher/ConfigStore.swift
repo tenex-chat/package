@@ -6,6 +6,8 @@ final class ConfigStore: ObservableObject {
     @Published var config: TenexConfig = TenexConfig()
     @Published var providers: TenexProviders = TenexProviders()
     @Published var llms: TenexLLMs = TenexLLMs()
+    @Published var embed: TenexEmbedConfig = TenexEmbedConfig()
+    @Published var image: TenexImageConfig = TenexImageConfig()
     @Published var loadError: String?
 
     private let logger = Logger(subsystem: "chat.tenex.launcher", category: "config")
@@ -34,6 +36,8 @@ final class ConfigStore: ObservableObject {
         config = load("config.json") ?? TenexConfig()
         providers = load("providers.json") ?? TenexProviders()
         llms = load("llms.json") ?? TenexLLMs()
+        embed = load("embed.json") ?? TenexEmbedConfig()
+        image = load("image.json") ?? TenexImageConfig()
     }
 
     private func load<T: Decodable>(_ filename: String) -> T? {
@@ -62,6 +66,14 @@ final class ConfigStore: ObservableObject {
 
     func saveLLMs() {
         save(llms, to: "llms.json")
+    }
+
+    func saveEmbed() {
+        save(embed, to: "embed.json")
+    }
+
+    func saveImage() {
+        save(image, to: "image.json")
     }
 
     private func save<T: Encodable>(_ value: T, to filename: String) {

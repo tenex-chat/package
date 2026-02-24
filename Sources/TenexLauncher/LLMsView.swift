@@ -7,48 +7,11 @@ struct LLMsView: View {
     @State private var selectedConfig: LLMConfigSelection?
 
     var body: some View {
-        Form {
-            // Role assignments
-            Section("Role Assignments") {
-                RolePicker(
-                    label: "Default",
-                    selection: binding(\.default),
-                    configs: configNames,
-                    help: "Primary fallback model for agent execution when no role-specific model is set."
-                )
-                RolePicker(
-                    label: "Summarization",
-                    selection: binding(\.summarization),
-                    configs: configNames,
-                    help: "Used for conversation summaries and prompt-based analysis helpers."
-                )
-                RolePicker(
-                    label: "Supervision",
-                    selection: binding(\.supervision),
-                    configs: configNames,
-                    help: "Used by the supervisor to verify agent behavior and produce corrections."
-                )
-                RolePicker(
-                    label: "Search",
-                    selection: binding(\.search),
-                    configs: configNames,
-                    help: "Used for LLM-powered web search; falls back to provider search when unavailable."
-                )
-                RolePicker(
-                    label: "Prompt Compilation",
-                    selection: binding(\.promptCompilation),
-                    configs: configNames,
-                    help: "Used to compile lessons and comments into effective system prompts."
-                )
-                RolePicker(
-                    label: "Compression",
-                    selection: binding(\.compression),
-                    configs: configNames,
-                    help: "Optional dedicated model for conversation history compression under context pressure."
-                )
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Configurations")
+                    .font(.headline)
 
-            Section("Configurations") {
                 if store.llms.configurations.isEmpty {
                     ContentUnavailableView(
                         "No LLM Configurations",
@@ -56,20 +19,33 @@ struct LLMsView: View {
                         description: Text("Add an LLM configuration to assign models to roles.")
                     )
                 } else {
-                    ForEach(sortedConfigKeys, id: \.self) { key in
-                        if let config = store.llms.configurations[key] {
-                            Button {
-                                selectedConfig = LLMConfigSelection(id: key)
-                            } label: {
-                                LLMConfigurationRow(name: key, config: config)
+                    VStack(spacing: 0) {
+                        ForEach(Array(sortedConfigKeys.enumerated()), id: \.element) { index, key in
+                            if let config = store.llms.configurations[key] {
+                                Button {
+                                    selectedConfig = LLMConfigSelection(id: key)
+                                } label: {
+                                    LLMConfigurationRow(name: key, config: config)
+                                        .padding(12)
+                                }
+                                .buttonStyle(.plain)
+                                if index < sortedConfigKeys.count - 1 {
+                                    Divider()
+                                }
                             }
-                            .buttonStyle(.plain)
                         }
                     }
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(.quaternary, lineWidth: 1)
+                    )
                 }
             }
+            Spacer(minLength: 0)
         }
-        .formStyle(.grouped)
+        .padding(16)
         .navigationTitle("LLMs")
         .toolbar {
             ToolbarItem {
@@ -100,22 +76,8 @@ struct LLMsView: View {
         store.llms.configurations.keys.sorted()
     }
 
-    private var configNames: [String] {
-        sortedConfigKeys
-    }
-
     private var providerNames: [String] {
         Array(store.providers.providers.keys).sorted()
-    }
-
-    private func binding(_ keyPath: WritableKeyPath<TenexLLMs, String?>) -> Binding<String> {
-        Binding(
-            get: { store.llms[keyPath: keyPath] ?? "" },
-            set: {
-                store.llms[keyPath: keyPath] = $0.isEmpty ? nil : $0
-                store.saveLLMs()
-            }
-        )
     }
 
     private func removeConfig(_ key: String) {
@@ -140,13 +102,14 @@ private struct LLMConfigurationRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            ProviderLogo(providerID, size: 20)
             VStack(alignment: .leading, spacing: 4) {
                 Text(name)
                     .font(.body.weight(.medium))
                 HStack(spacing: 6) {
-                    Text("Provider: \(providerSummary)")
+                    Text(providerSummary)
                     Text("•")
-                    Text("Model: \(modelSummary)")
+                    Text(modelSummary)
                         .font(.system(.caption, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -160,6 +123,15 @@ private struct LLMConfigurationRow: View {
                 .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
+    }
+
+    private var providerID: String {
+        switch config {
+        case .standard(let standard):
+            return standard.provider
+        case .meta:
+            return ""
+        }
     }
 
     private var providerSummary: String {

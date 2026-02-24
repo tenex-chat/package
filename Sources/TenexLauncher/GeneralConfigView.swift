@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 
 struct GeneralConfigView: View {
@@ -7,12 +8,17 @@ struct GeneralConfigView: View {
     @ObservedObject var pendingEventsQueue: PendingEventsQueue
     let tab: SidebarTab
 
+    @State private var launchAtLogin = false
+
     var body: some View {
         Form {
             switch tab {
             case .identity: identitySection
             case .network: networkSection
             case .relay: localRelaySection
+            case .roles: rolesSection
+            case .embeddings: embeddingsSection
+            case .imageGeneration: imageGenerationSection
             case .agents: agentsSection
             case .conversations: conversationsSection
             case .app: appSection
@@ -44,6 +50,61 @@ struct GeneralConfigView: View {
                 Text("Nostr pubkeys authorized to use this TENEX instance. The backend only responds to messages from these users.")
             }
         }
+    }
+
+    private var rolesSection: some View {
+        Section("Role Assignments") {
+            RolePicker(
+                label: "Default",
+                selection: llmBinding(\.default),
+                configs: llmConfigNames,
+                help: "Primary fallback model for agent execution when no role-specific model is set."
+            )
+            RolePicker(
+                label: "Summarization",
+                selection: llmBinding(\.summarization),
+                configs: llmConfigNames,
+                help: "Used for conversation summaries and prompt-based analysis helpers."
+            )
+            RolePicker(
+                label: "Supervision",
+                selection: llmBinding(\.supervision),
+                configs: llmConfigNames,
+                help: "Used by the supervisor to verify agent behavior and produce corrections."
+            )
+            RolePicker(
+                label: "Search",
+                selection: llmBinding(\.search),
+                configs: llmConfigNames,
+                help: "Used for LLM-powered web search; falls back to provider search when unavailable."
+            )
+            RolePicker(
+                label: "Prompt Compilation",
+                selection: llmBinding(\.promptCompilation),
+                configs: llmConfigNames,
+                help: "Used to compile lessons and comments into effective system prompts."
+            )
+            RolePicker(
+                label: "Compression",
+                selection: llmBinding(\.compression),
+                configs: llmConfigNames,
+                help: "Optional dedicated model for conversation history compression under context pressure."
+            )
+        }
+    }
+
+    private var llmConfigNames: [String] {
+        store.llms.configurations.keys.sorted()
+    }
+
+    private func llmBinding(_ keyPath: WritableKeyPath<TenexLLMs, String?>) -> Binding<String> {
+        Binding(
+            get: { store.llms[keyPath: keyPath] ?? "" },
+            set: {
+                store.llms[keyPath: keyPath] = $0.isEmpty ? nil : $0
+                store.saveLLMs()
+            }
+        )
     }
 
     private var networkSection: some View {
@@ -118,12 +179,14 @@ struct GeneralConfigView: View {
                     case .stopped, .failed:
                         Button("Start Relay") {
                             Task {
-                                relayManager.configure(port: store.config.localRelay?.port ?? 7777)
+                                relayManager.configure(
+                                    port: store.config.localRelay?.port ?? 7777,
+                                    syncRelays: store.config.localRelay?.syncRelays ?? ["wss://tenex.chat"]
+                                )
                                 await relayManager.start()
                                 if relayManager.status == .running {
                                     negentropySync.configure(
                                         localRelayURL: relayManager.localRelayURL,
-                                        remoteRelays: store.config.localRelay?.syncRelays ?? ["wss://tenex.chat"],
                                         relayManager: relayManager
                                     )
                                     negentropySync.start()
@@ -163,6 +226,22 @@ struct GeneralConfigView: View {
 
     private var appSection: some View {
         Group {
+            Section("Startup") {
+                Toggle("Start TENEX at login", isOn: $launchAtLogin)
+                    .onAppear {
+                        launchAtLogin = SMAppService.mainApp.status == .enabled
+                    }
+                    .onChange(of: launchAtLogin) { _, enabled in
+                        if enabled {
+                            try? SMAppService.mainApp.register()
+                        } else {
+                            try? SMAppService.mainApp.unregister()
+                        }
+                        store.config.launchAtLogin = enabled
+                        store.saveConfig()
+                    }
+            }
+
             Section("Paths") {
                 TextField("Projects Base", text: bound(\.projectsBase, default: "~/tenex"))
             }
@@ -216,6 +295,151 @@ struct GeneralConfigView: View {
             .font(.system(.body, design: .monospaced))
             .frame(minHeight: 100)
         }
+    }
+
+    // MARK: - Embeddings
+
+    private var embeddingsSection: some View {
+        Section("Embedding Model") {
+            Picker("Provider", selection: embedProviderBinding) {
+                Text("Local").tag("local")
+                if store.providers.providers["openai"] != nil {
+                    Text("OpenAI").tag("openai")
+                }
+                if store.providers.providers["openrouter"] != nil {
+                    Text("OpenRouter").tag("openrouter")
+                }
+            }
+
+            Picker("Model", selection: embedModelBinding) {
+                ForEach(embedModelsForProvider, id: \.self) { model in
+                    Text(model).tag(model)
+                }
+            }
+        }
+    }
+
+    private var embedModelsForProvider: [String] {
+        switch store.embed.provider ?? "local" {
+        case "openai":
+            return ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"]
+        case "openrouter":
+            return ["openai/text-embedding-3-small", "openai/text-embedding-3-large", "openai/text-embedding-ada-002"]
+        default:
+            return ["Xenova/all-MiniLM-L6-v2", "Xenova/all-mpnet-base-v2", "Xenova/paraphrase-multilingual-MiniLM-L12-v2"]
+        }
+    }
+
+    private var embedProviderBinding: Binding<String> {
+        Binding(
+            get: { store.embed.provider ?? "local" },
+            set: {
+                store.embed.provider = $0
+                let models: [String]
+                switch $0 {
+                case "openai":
+                    models = ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"]
+                case "openrouter":
+                    models = ["openai/text-embedding-3-small", "openai/text-embedding-3-large", "openai/text-embedding-ada-002"]
+                default:
+                    models = ["Xenova/all-MiniLM-L6-v2", "Xenova/all-mpnet-base-v2", "Xenova/paraphrase-multilingual-MiniLM-L12-v2"]
+                }
+                store.embed.model = models.first
+                store.saveEmbed()
+            }
+        )
+    }
+
+    private var embedModelBinding: Binding<String> {
+        Binding(
+            get: { store.embed.model ?? embedModelsForProvider.first ?? "" },
+            set: {
+                store.embed.model = $0
+                store.saveEmbed()
+            }
+        )
+    }
+
+    // MARK: - Image Generation
+
+    private static let imageModels = [
+        "black-forest-labs/flux.2-pro",
+        "black-forest-labs/flux.2-max",
+        "black-forest-labs/flux.2-klein-4b",
+        "google/gemini-2.5-flash-image",
+    ]
+
+    private static let aspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]
+    private static let imageSizes = ["1K", "2K", "4K"]
+
+    private var hasOpenRouter: Bool {
+        store.providers.providers["openrouter"] != nil
+    }
+
+    private var imageGenerationSection: some View {
+        Group {
+            if !hasOpenRouter {
+                Section("Image Generation") {
+                    Text("Image generation requires an OpenRouter provider. Add one in the Providers tab.")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Section("Image Generation Model") {
+                    Picker("Model", selection: imageModelBinding) {
+                        ForEach(Self.imageModels, id: \.self) { model in
+                            Text(model).tag(model)
+                        }
+                    }
+                }
+
+                Section("Defaults") {
+                    Picker("Aspect Ratio", selection: imageAspectRatioBinding) {
+                        Text("None").tag("")
+                        ForEach(Self.aspectRatios, id: \.self) { ratio in
+                            Text(ratio).tag(ratio)
+                        }
+                    }
+
+                    Picker("Image Size", selection: imageSizeBinding) {
+                        Text("None").tag("")
+                        ForEach(Self.imageSizes, id: \.self) { size in
+                            Text(size).tag(size)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var imageModelBinding: Binding<String> {
+        Binding(
+            get: { store.image.model ?? Self.imageModels.first ?? "" },
+            set: {
+                store.image.provider = "openrouter"
+                store.image.model = $0
+                store.saveImage()
+            }
+        )
+    }
+
+    private var imageAspectRatioBinding: Binding<String> {
+        Binding(
+            get: { store.image.defaultAspectRatio ?? "" },
+            set: {
+                store.image.defaultAspectRatio = $0.isEmpty ? nil : $0
+                store.saveImage()
+            }
+        )
+    }
+
+    private var imageSizeBinding: Binding<String> {
+        Binding(
+            get: { store.image.defaultImageSize ?? "" },
+            set: {
+                store.image.defaultImageSize = $0.isEmpty ? nil : $0
+                store.saveImage()
+            }
+        )
     }
 
     // MARK: - Agents

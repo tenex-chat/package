@@ -13,6 +13,7 @@ struct OnboardingView: View {
         case relay
         case providers
         case llms
+        case mobileSetup
     }
 
     enum RelayMode {
@@ -47,6 +48,9 @@ struct OnboardingView: View {
     @State private var ngrokAvailable = false
     @State private var ngrokEnabled = false
 
+    // Launch at login state
+    @State private var launchAtLogin = true
+
     enum IdentityPath {
         case none
         case existing
@@ -77,6 +81,8 @@ struct OnboardingView: View {
                     ProvidersView(store: store)
                 case .llms:
                     LLMsView(store: store)
+                case .mobileSetup:
+                    mobileSetupStepView
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -85,13 +91,22 @@ struct OnboardingView: View {
 
             // Navigation
             HStack {
-                if step != .identity {
+                if step != .identity || identityPath != .none {
                     Button("Back") {
                         switch step {
+                        case .identity:
+                            identityPath = .none
+                            generatedNsec = ""
+                            identityNpub = ""
+                            identityHexPubkey = ""
+                            displayName = NSFullUserName().isEmpty ? NSUserName() : NSFullUserName()
+                            selectedAvatarStyle = ""
+                            nsecInput = ""
+                            nsecError = nil
+                        case .mobileSetup: step = .llms
                         case .llms: step = .providers
                         case .providers: step = .relay
                         case .relay: step = .identity
-                        case .identity: break
                         }
                     }
                 }
@@ -100,7 +115,19 @@ struct OnboardingView: View {
 
                 switch step {
                 case .identity:
-                    if identityCompleted {
+                    if identityPath == .create {
+                        Button("Continue") {
+                            storeKeyAndComplete()
+                        }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessing)
+                    } else if identityPath == .existing {
+                        Button("Validate & Continue") {
+                            validateExistingKey()
+                        }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(nsecInput.isEmpty || isProcessing)
+                    } else if identityCompleted {
                         Button("Continue") {
                             step = .relay
                         }
@@ -120,8 +147,19 @@ struct OnboardingView: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(store.providers.providers.isEmpty)
                 case .llms:
-                    Button("Finish Setup") {
+                    Button("Continue") {
+                        store.config.launchAtLogin = launchAtLogin
                         generateBackendKeyAndApprove()
+                        store.saveConfig()
+                        step = .mobileSetup
+                    }
+                    .keyboardShortcut(.defaultAction)
+                case .mobileSetup:
+                    Toggle("Start TENEX at login", isOn: $launchAtLogin)
+                        .toggleStyle(.checkbox)
+
+                    Button("Finish Setup") {
+                        store.config.launchAtLogin = launchAtLogin
                         store.saveConfig()
                     }
                     .keyboardShortcut(.defaultAction)
@@ -150,6 +188,8 @@ struct OnboardingView: View {
             "Connect your AI providers."
         case .llms:
             "Configure your LLM models and role assignments."
+        case .mobileSetup:
+            "Set up TENEX on your iPhone."
         }
     }
 
@@ -224,22 +264,6 @@ struct OnboardingView: View {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
-            }
-
-            HStack {
-                Button("Back") {
-                    identityPath = .none
-                    nsecInput = ""
-                    nsecError = nil
-                }
-
-                Spacer()
-
-                Button("Validate & Continue") {
-                    validateExistingKey()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(nsecInput.isEmpty || isProcessing)
             }
         }
     }
@@ -348,25 +372,6 @@ struct OnboardingView: View {
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(RoundedRectangle(cornerRadius: 6).fill(.background.secondary))
-            }
-
-            HStack {
-                Button("Back") {
-                    identityPath = .none
-                    generatedNsec = ""
-                    identityNpub = ""
-                    identityHexPubkey = ""
-                    displayName = ""
-                    selectedAvatarStyle = ""
-                }
-
-                Spacer()
-
-                Button("Continue") {
-                    storeKeyAndComplete()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessing)
             }
         }
     }
@@ -519,6 +524,7 @@ struct OnboardingView: View {
             store.config.relays = [remoteRelayURL]
             store.config.localRelay = LocalRelayConfig(enabled: false)
         case .local:
+            store.config.relays = ["ws://localhost:7777"]
             store.config.localRelay = LocalRelayConfig(
                 enabled: true,
                 autoStart: true,
@@ -529,6 +535,79 @@ struct OnboardingView: View {
         }
     }
 
+    // MARK: - Mobile Setup Step
+
+    private var mobileSetupStepView: some View {
+        VStack(spacing: 20) {
+            let setupURL = QRCodeGenerator.mobileSetupURL(
+                nsec: generatedNsec,
+                relay: store.config.relays?.first,
+                backendPubkey: store.config.tenexPublicKey
+            )
+
+            if generatedNsec.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "qrcode")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.secondary)
+                    Text("QR code not available — no key was generated during this session.")
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            } else {
+                if let qrImage = QRCodeGenerator.generate(from: setupURL) {
+                    Image(nsImage: qrImage)
+                        .interpolation(.none)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 200, height: 200)
+                }
+
+                VStack(spacing: 4) {
+                    if let relay = store.config.relays?.first {
+                        HStack(spacing: 4) {
+                            Text("Relay:")
+                                .foregroundStyle(.secondary)
+                            Text(relay)
+                                .font(.system(.caption, design: .monospaced))
+                        }
+                        .font(.caption)
+                    }
+                    if let pubkey = store.config.tenexPublicKey {
+                        HStack(spacing: 4) {
+                            Text("Backend:")
+                                .foregroundStyle(.secondary)
+                            Text(String(pubkey.prefix(8)) + "..." + String(pubkey.suffix(8)))
+                                .font(.system(.caption, design: .monospaced))
+                        }
+                        .font(.caption)
+                    }
+                }
+
+                VStack(spacing: 8) {
+                    Text("TENEX for iPhone")
+                        .font(.subheadline.weight(.medium))
+                    Text("Coming soon on TestFlight. Scan this QR code with the TENEX iOS app to instantly log in and connect to your backend.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 360)
+                }
+
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("This QR code contains your private key. Do not share it.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(.top, 24)
+    }
+
     // MARK: - Actions
 
     private func generateBackendKeyAndApprove() {
@@ -537,6 +616,7 @@ struct OnboardingView: View {
             guard let keypair = try? coreManager.core.generateKeypair() else { return }
             guard let hexPrivateKey = Bech32.nsecToHex(keypair.nsec) else { return }
             store.config.tenexPrivateKey = hexPrivateKey
+            store.config.tenexPublicKey = keypair.pubkeyHex
 
             // Approve the backend in the client
             try? coreManager.core.approveBackend(pubkey: keypair.pubkeyHex)

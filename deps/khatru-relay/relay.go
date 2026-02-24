@@ -22,6 +22,7 @@ type Relay struct {
 	khatru  *khatru.Relay
 	server  *http.Server
 	storage *Storage
+	syncer  *Syncer
 
 	mu        sync.RWMutex
 	startTime time.Time
@@ -188,6 +189,12 @@ func (r *Relay) Start(ctx context.Context) error {
 		}
 	}()
 
+	// Start syncer if sync relays are configured
+	if len(r.config.Sync.Relays) > 0 {
+		r.syncer = NewSyncer(r.config.Sync, r.storage)
+		r.syncer.Start(ctx)
+	}
+
 	// Wait for context cancellation or error
 	select {
 	case err := <-errCh:
@@ -200,6 +207,11 @@ func (r *Relay) Start(ctx context.Context) error {
 // Shutdown gracefully shuts down the relay
 func (r *Relay) Shutdown() error {
 	log.Println("Shutting down relay...")
+
+	// Stop syncer first
+	if r.syncer != nil {
+		r.syncer.Stop()
+	}
 
 	// Shutdown HTTP server with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -240,12 +252,18 @@ func (r *Relay) handleStats(w http.ResponseWriter, req *http.Request) {
 
 	count, _ := r.storage.CountEvents(req.Context(), nostr.Filter{})
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	stats := map[string]interface{}{
 		"uptime_seconds": int(uptime.Seconds()),
 		"event_count":    count,
 		"relay_info":     r.config.NIP11,
-	})
+	}
+
+	if r.syncer != nil {
+		stats["sync"] = r.syncer.Stats()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }
 
 // WriteConfigTemplate writes a config template to the given path

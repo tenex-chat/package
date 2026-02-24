@@ -45,6 +45,7 @@ final class RelayManager: ObservableObject {
 
     // Configuration
     private(set) var port: Int = 7777
+    private(set) var syncRelays: [String] = ["wss://tenex.chat"]
 
     // Directories
     private var relayDir: URL {
@@ -101,8 +102,9 @@ final class RelayManager: ObservableObject {
 
     // MARK: - Configuration
 
-    func configure(port: Int) {
+    func configure(port: Int, syncRelays: [String] = ["wss://tenex.chat"]) {
         self.port = port
+        self.syncRelays = syncRelays
     }
 
     // MARK: - Lifecycle
@@ -253,8 +255,9 @@ final class RelayManager: ObservableObject {
                 "max_event_tags": 2500,
                 "max_content_length": 102400
             ],
-            "negentropy": [
-                "enabled": true
+            "sync": [
+                "relays": syncRelays,
+                "kinds": [4199, 4129, 4200, 4201, 4202, 34199]
             ]
         ]
 

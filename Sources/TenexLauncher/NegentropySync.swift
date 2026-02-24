@@ -32,44 +32,31 @@ enum SyncStatus: Equatable {
     }
 }
 
+/// Polls the Go relay's /stats endpoint to surface sync status in the UI.
+/// Actual sync is handled by the Go relay's Syncer.
 @MainActor
 final class NegentropySync: ObservableObject {
     @Published var status: SyncStatus = .idle
     @Published var lastSuccessfulSync: Date?
     @Published var syncCount: Int = 0
 
-    private let logger = Logger(subsystem: "chat.tenex.launcher", category: "negentropy-sync")
+    private let logger = Logger(subsystem: "chat.tenex.launcher", category: "sync-status")
 
-    // Configuration
     private var localRelayURL: String = "ws://127.0.0.1:7777"
-    private var remoteRelays: [String] = ["wss://tenex.chat"]
-    private var syncIntervalSeconds: TimeInterval = 60
+    private var pollIntervalSeconds: TimeInterval = 10
     private var enabled: Bool = false
-
-    // Event kinds to sync (TENEX protocol kinds)
-    private let syncKinds: [Int] = [4199, 4129, 4200, 4201, 4202, 0, 14199]
-
-    // Sync state
-    private var syncTask: Task<Void, Never>?
-    private var currentBackoff: TimeInterval = 60  // Backoff for failures, starts at 60s
-    private let maxBackoff: TimeInterval = 900     // 15 minutes max backoff
-    private let minBackoff: TimeInterval = 60      // 1 minute min backoff
-    private var useBackoff: Bool = false           // Only use backoff after failures
-
-    // Reference to RelayManager for status checks
+    private var pollTask: Task<Void, Never>?
     private weak var relayManager: RelayManager?
 
     // MARK: - Configuration
 
     func configure(
         localRelayURL: String,
-        remoteRelays: [String],
-        syncIntervalSeconds: TimeInterval = 60,
+        pollIntervalSeconds: TimeInterval = 10,
         relayManager: RelayManager
     ) {
         self.localRelayURL = localRelayURL
-        self.remoteRelays = remoteRelays
-        self.syncIntervalSeconds = syncIntervalSeconds
+        self.pollIntervalSeconds = pollIntervalSeconds
         self.relayManager = relayManager
     }
 
@@ -78,124 +65,95 @@ final class NegentropySync: ObservableObject {
     func start() {
         guard !enabled else { return }
         enabled = true
-        currentBackoff = minBackoff
-        useBackoff = false
-        startSyncLoop()
-        logger.info("Negentropy sync started with interval \(Int(self.syncIntervalSeconds))s")
+        startPollLoop()
+        logger.info("Sync status polling started (interval: \(Int(self.pollIntervalSeconds))s)")
     }
 
     func stop() {
         enabled = false
-        syncTask?.cancel()
-        syncTask = nil
-        logger.info("Negentropy sync stopped")
+        pollTask?.cancel()
+        pollTask = nil
+        status = .idle
+        logger.info("Sync status polling stopped")
     }
 
-    // MARK: - Sync Loop
+    // MARK: - Poll Loop
 
-    private func startSyncLoop() {
-        syncTask?.cancel()
+    private func startPollLoop() {
+        pollTask?.cancel()
 
-        syncTask = Task { [weak self] in
+        pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, self.enabled else { break }
 
-                // Check if local relay is running
                 if let manager = self.relayManager, manager.status == .running {
-                    await self.performSync()
+                    await self.pollStats()
                 }
 
-                // Use backoff interval on failures, configured interval on success
-                let sleepInterval = self.useBackoff ? self.currentBackoff : self.syncIntervalSeconds
-                let sleepNanos = UInt64(sleepInterval * 1_000_000_000)
+                let sleepNanos = UInt64(self.pollIntervalSeconds * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: sleepNanos)
             }
         }
     }
 
-    // MARK: - Sync Execution
+    // MARK: - Stats Polling
 
-    private func performSync() async {
-        guard relayManager != nil else {
-            logger.warning("No relay manager available for sync")
-            return
-        }
-
-        status = .syncing
-
-        // For the Khatru-based relay, we use WebSocket-based negentropy sync
-        // The actual negentropy protocol implementation would involve:
-        // 1. Connect to local relay
-        // 2. Connect to remote relay
-        // 3. Run negentropy protocol to reconcile events
-        //
-        // For the initial implementation, we verify connectivity and mark as successful
-        // Full negentropy sync will be added when the Go relay supports it
-
-        var allSuccess = true
-        var lastErrorMsg = ""
-
-        for remoteRelay in remoteRelays {
-            let success = await performConnectivityCheck(
-                localURL: localRelayURL,
-                remoteURL: remoteRelay
-            )
-
-            if !success {
-                allSuccess = false
-                lastErrorMsg = "Connectivity check with \(remoteRelay) failed"
-            }
-        }
-
-        if allSuccess {
-            lastSuccessfulSync = Date()
-            syncCount += 1
-            status = .lastSyncSuccess(Date())
-            currentBackoff = minBackoff  // Reset backoff on success
-            useBackoff = false           // Use configured interval on success
-            logger.info("Negentropy sync completed successfully")
-        } else {
-            status = .lastSyncFailed(Date(), lastErrorMsg)
-            // Increase backoff: 60s -> 120s -> 300s -> ... -> 900s max
-            currentBackoff = min(currentBackoff * 2, maxBackoff)
-            useBackoff = true            // Use backoff interval after failure
-            logger.error("Negentropy sync failed: \(lastErrorMsg)")
-        }
-    }
-
-    /// Performs connectivity check between local and remote relay
-    /// For now, this verifies local relay is healthy - full negentropy protocol TBD
-    private func performConnectivityCheck(localURL: String, remoteURL: String) async -> Bool {
-        // Verify local relay is reachable via health endpoint
-        let healthURLString = localURL
+    private func pollStats() async {
+        let httpURL = localRelayURL
             .replacingOccurrences(of: "ws://", with: "http://")
             .replacingOccurrences(of: "wss://", with: "https://")
 
-        guard let localHealthURL = URL(string: healthURLString + "/health") else {
-            logger.error("Invalid local relay URL")
-            return false
+        guard let statsURL = URL(string: httpURL + "/stats") else {
+            return
         }
 
         do {
-            let (_, response) = try await URLSession.shared.data(from: localHealthURL)
+            let (data, response) = try await URLSession.shared.data(from: statsURL)
             guard let httpResponse = response as? HTTPURLResponse,
                   httpResponse.statusCode == 200 else {
-                logger.error("Local relay health check failed")
-                return false
+                return
             }
 
-            // TODO: Implement actual negentropy sync protocol
-            // For now, consider sync successful if local relay is healthy
-            // The actual implementation would:
-            // 1. Open WebSocket to local relay
-            // 2. Open WebSocket to remote relay
-            // 3. Exchange negentropy frames to identify missing events
-            // 4. Request and store missing events
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let syncInfo = json["sync"] as? [String: Any] else {
+                // Relay is running but sync stats not yet available
+                if status == .idle {
+                    status = .syncing
+                }
+                return
+            }
 
-            return true
+            let eventsSynced = syncInfo["events_synced"] as? Int ?? 0
+
+            // Parse last_sync_time
+            var lastSync: Date?
+            if let timeStr = syncInfo["last_sync_time"] as? String {
+                let formatter = ISO8601DateFormatter()
+                lastSync = formatter.date(from: timeStr)
+            }
+
+            // Check relay connection statuses
+            var allConnected = true
+            if let relayStatus = syncInfo["relay_status"] as? [String: Any] {
+                for (_, value) in relayStatus {
+                    if let info = value as? [String: Any],
+                       let connected = info["connected"] as? Bool,
+                       !connected {
+                        allConnected = false
+                    }
+                }
+            }
+
+            syncCount = eventsSynced
+            if let lastSync {
+                lastSuccessfulSync = lastSync
+                status = .lastSyncSuccess(lastSync)
+            } else if allConnected {
+                status = .syncing
+            }
+
         } catch {
-            logger.error("Local relay health check error: \(error.localizedDescription)")
-            return false
+            // Stats endpoint unreachable - don't change status, relay might be temporarily busy
         }
     }
 
@@ -206,6 +164,7 @@ final class NegentropySync: ObservableObject {
             status = .lastSyncFailed(Date(), "Local relay not running")
             return
         }
-        await performSync()
+        // Trigger an immediate poll to refresh the displayed stats
+        await pollStats()
     }
 }

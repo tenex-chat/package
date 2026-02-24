@@ -15,7 +15,7 @@ type Config struct {
 	DataDir     string           `json:"data_dir"`
 	NIP11       NIP11Config      `json:"nip11"`
 	Limits      LimitsConfig     `json:"limits"`
-	Negentropy  NegentropyConfig `json:"negentropy"`
+	Sync        SyncConfig       `json:"sync"`
 }
 
 // NIP11Config contains all NIP-11 relay information document fields
@@ -38,9 +38,10 @@ type LimitsConfig struct {
 	MaxContentLength  int `json:"max_content_length"`
 }
 
-// NegentropyConfig contains negentropy sync settings
-type NegentropyConfig struct {
-	Enabled bool `json:"enabled"`
+// SyncConfig contains relay sync settings
+type SyncConfig struct {
+	Relays []string `json:"relays"`
+	Kinds  []int    `json:"kinds"`
 }
 
 func defaultDataDir() string {
@@ -72,8 +73,9 @@ func DefaultConfig() *Config {
 			MaxEventTags:     2500,
 			MaxContentLength: 102400,
 		},
-		Negentropy: NegentropyConfig{
-			Enabled: true,
+		Sync: SyncConfig{
+			Relays: []string{"wss://tenex.chat"},
+			Kinds:  []int{4199, 4129, 4200, 4201, 4202, 34199},
 		},
 	}
 }

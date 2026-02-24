@@ -52,7 +52,6 @@ struct ProvidersView: View {
                         id: provider,
                         name: settingsProviderDisplayNames[provider] ?? provider,
                         subtitle: subtitle(for: provider),
-                        iconSystemName: iconName(for: provider),
                         isConnected: connected,
                         buttonLabel: connected ? "Disconnect" : "Connect",
                         buttonDisabled: buttonDisabled(for: provider)
@@ -113,6 +112,9 @@ struct ProvidersView: View {
                     }
                     store.providers.providers[selectedProvider] = ProviderEntry(apiKey: trimmed)
                     store.saveProviders()
+                    if selectedProvider == "openrouter" {
+                        syncOpenRouterKeyToMacApp(trimmed)
+                    }
                     credentialValue = ""
                     credentialError = nil
                     showCredentialSheet = false
@@ -122,6 +124,25 @@ struct ProvidersView: View {
         }
         .padding(16)
         .frame(width: 420)
+    }
+
+    private func syncOpenRouterKeyToMacApp(_ key: String) {
+        let url = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("com.tenex.mvp/credentials/openrouter_api_key.txt")
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? key.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    private func removeOpenRouterKeyFromMacApp() {
+        let url = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("com.tenex.mvp/credentials/openrouter_api_key.txt")
+        try? FileManager.default.removeItem(at: url)
     }
 
     private func connect(_ provider: String) {
@@ -147,6 +168,9 @@ struct ProvidersView: View {
     private func disconnect(_ provider: String) {
         store.providers.providers.removeValue(forKey: provider)
         store.saveProviders()
+        if provider == "openrouter" {
+            removeOpenRouterKeyFromMacApp()
+        }
     }
 
     private func isConnected(_ provider: String) -> Bool {
@@ -199,26 +223,6 @@ struct ProvidersView: View {
         }
     }
 
-    private func iconName(for provider: String) -> String {
-        switch provider {
-        case "openrouter":
-            return "arrow.triangle.2.circlepath"
-        case "openai":
-            return "aqi.medium"
-        case "anthropic":
-            return "a.circle"
-        case "ollama":
-            return "desktopcomputer"
-        case "claude-code":
-            return "a.square"
-        case "gemini-cli":
-            return "sparkles"
-        case "codex-app-server":
-            return "chevron.left.forwardslash.chevron.right"
-        default:
-            return "circle"
-        }
-    }
 
     private func detectLocalAvailability() async {
         var availability: [String: Bool] = [:]
@@ -250,6 +254,9 @@ struct ProvidersView: View {
         for (provider, envVar) in apiKeyEnvVars {
             if !isConnected(provider), let apiKey = ProcessInfo.processInfo.environment[envVar], !apiKey.isEmpty {
                 store.providers.providers[provider] = ProviderEntry(apiKey: apiKey)
+                if provider == "openrouter" {
+                    syncOpenRouterKeyToMacApp(apiKey)
+                }
             }
         }
 
@@ -297,10 +304,7 @@ struct ProvidersView: View {
             VStack(spacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                     HStack(spacing: 12) {
-                        Image(systemName: row.iconSystemName)
-                            .font(.title3)
-                            .frame(width: 24)
-                            .foregroundStyle(.secondary)
+                        ProviderLogo(row.id, size: 24)
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
                                 Text(row.name)
@@ -344,7 +348,6 @@ private struct SettingsProviderRowData {
     let id: String
     let name: String
     let subtitle: String
-    let iconSystemName: String
     let isConnected: Bool
     let buttonLabel: String?
     let buttonDisabled: Bool

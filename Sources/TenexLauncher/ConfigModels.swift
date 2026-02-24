@@ -5,6 +5,7 @@ import Foundation
 struct TenexConfig: Codable {
     var whitelistedPubkeys: [String]?
     var tenexPrivateKey: String?
+    var tenexPublicKey: String?
     var backendName: String?
     var projectsBase: String?
     var relays: [String]?
@@ -17,6 +18,7 @@ struct TenexConfig: Codable {
     var escalation: EscalationConfig?
     var intervention: InterventionConfig?
     var localRelay: LocalRelayConfig?
+    var launchAtLogin: Bool?
 }
 
 struct LocalRelayConfig: Codable {
@@ -64,6 +66,22 @@ struct InterventionConfig: Codable {
     var agent: String?
     var reviewTimeout: Int?
     var skipIfActiveWithin: Int?
+}
+
+// MARK: - embed.json
+
+struct TenexEmbedConfig: Codable {
+    var provider: String?
+    var model: String?
+}
+
+// MARK: - image.json
+
+struct TenexImageConfig: Codable {
+    var provider: String?
+    var model: String?
+    var defaultAspectRatio: String?
+    var defaultImageSize: String?
 }
 
 // MARK: - providers.json

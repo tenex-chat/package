@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 
 @main
@@ -6,8 +7,10 @@ struct TenexLauncherApp: App {
     @StateObject private var configStore = ConfigStore()
     @StateObject private var coreManager = TenexCoreManager()
     @StateObject private var relayManager = RelayManager()
+    @StateObject private var ngrokManager = NgrokManager()
     @StateObject private var negentropySync = NegentropySync()
     @StateObject private var pendingEventsQueue = PendingEventsQueue()
+    @NSApplicationDelegateAdaptor private var appDelegate: DockVisibilityDelegate
 
     @State private var isLoggedIn = false
     @State private var userNpub = ""
@@ -20,6 +23,7 @@ struct TenexLauncherApp: App {
                 daemon: daemon,
                 configStore: configStore,
                 relayManager: relayManager,
+                ngrokManager: ngrokManager,
                 negentropySync: negentropySync
             )
         } label: {
@@ -39,6 +43,11 @@ struct TenexLauncherApp: App {
                 pendingEventsQueue: pendingEventsQueue
             )
             .frame(minWidth: 700, minHeight: 500)
+            .onChange(of: configStore.needsOnboarding) { _, needsOnboarding in
+                if !needsOnboarding {
+                    startAllServices()
+                }
+            }
         }
         .defaultSize(width: 800, height: 600)
 
@@ -86,8 +95,7 @@ struct TenexLauncherApp: App {
             }
             .onChange(of: configStore.needsOnboarding) { _, needsOnboarding in
                 if !needsOnboarding {
-                    startLocalRelayIfNeeded()
-                    attemptAutoLogin()
+                    startAllServices()
                 }
             }
             .onChange(of: isLoggedIn) { _, loggedIn in
@@ -100,6 +108,16 @@ struct TenexLauncherApp: App {
             }
         }
         .defaultSize(width: 1000, height: 700)
+    }
+
+    private func startAllServices() {
+        daemon.start()
+        startLocalRelayIfNeeded()
+        attemptAutoLogin()
+
+        if configStore.config.launchAtLogin == true {
+            try? SMAppService.mainApp.register()
+        }
     }
 
     private func attemptAutoLogin() {
@@ -139,22 +157,58 @@ struct TenexLauncherApp: App {
         Task { @MainActor in
             let port = localRelay.port ?? 7777
 
-            relayManager.configure(port: port)
+            relayManager.configure(
+                port: port,
+                syncRelays: localRelay.syncRelays ?? ["wss://tenex.chat"]
+            )
             await relayManager.start()
 
-            // If relay started successfully, start sync and drain pending events
+            // If relay started successfully, start sync status polling and drain pending events
             if relayManager.status == .running {
                 negentropySync.configure(
                     localRelayURL: relayManager.localRelayURL,
-                    remoteRelays: localRelay.syncRelays ?? ["wss://tenex.chat"],
                     relayManager: relayManager
                 )
                 negentropySync.start()
 
                 // Drain any pending events (waits for queue to load first)
                 _ = await pendingEventsQueue.drainWhenReady(relayURL: relayManager.localRelayURL)
+
+                // Start ngrok tunnel if enabled
+                if localRelay.ngrokEnabled == true {
+                    ngrokManager.configure(port: port)
+                    await ngrokManager.start()
+                }
             }
         }
     }
 
+}
+
+// MARK: - Dock Visibility
+
+class DockVisibilityDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(windowChanged), name: NSWindow.didBecomeKeyNotification, object: nil)
+        nc.addObserver(self, selector: #selector(windowChanged), name: NSWindow.willCloseNotification, object: nil)
+    }
+
+    @objc private func windowChanged(_ notification: Notification) {
+        // Defer so the window state has settled
+        DispatchQueue.main.async { Self.updateDockVisibility() }
+    }
+
+    static func updateDockVisibility() {
+        let hasVisibleWindow = NSApp.windows.contains {
+            $0.isVisible && $0.canBecomeKey && $0.className != "NSStatusBarWindow"
+        }
+        let desired: NSApplication.ActivationPolicy = hasVisibleWindow ? .regular : .accessory
+        if NSApp.activationPolicy() != desired {
+            NSApp.setActivationPolicy(desired)
+            if desired == .regular {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+    }
 }

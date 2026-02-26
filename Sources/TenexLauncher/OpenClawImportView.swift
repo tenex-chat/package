@@ -9,7 +9,7 @@ struct OpenClawImportView: View {
                 HStack(spacing: 14) {
                     Image(systemName: "square.and.arrow.down.on.square.fill")
                         .font(.system(size: 36))
-                        .foregroundStyle(.accent)
+                        .foregroundStyle(Color.accentColor)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("OpenClaw Installation Found")

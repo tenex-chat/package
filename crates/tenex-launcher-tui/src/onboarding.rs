@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use console::style;
-use dialoguer::{Confirm, Password, Select};
-use tenex_orchestrator::config::{ConfigStore, ProviderEntry, TenexConfig, TenexProviders};
-use tenex_orchestrator::onboarding::OnboardingStateMachine;
+use dialoguer::{Confirm, Input, Password, Select};
+use tenex_orchestrator::config::{ConfigStore, LauncherConfig, ProviderEntry, TenexConfig, TenexProviders};
+use tenex_orchestrator::onboarding::{OnboardingStateMachine, RelayMode, build_relay_config, seed_default_llms};
 use tenex_orchestrator::openclaw;
+use tenex_orchestrator::provider;
 
 use crate::display;
 
@@ -16,7 +17,7 @@ pub async fn run(config_store: &Arc<ConfigStore>) -> Result<()> {
     let mut sm = OnboardingStateMachine::new(has_openclaw);
     let mut config = config_store.load_config();
     let mut providers = config_store.load_providers();
-    let _launcher = config_store.load_launcher();
+    let mut launcher = config_store.load_launcher();
 
     // Step 1: Identity
     step_identity(&mut config, config_store)?;
@@ -28,9 +29,21 @@ pub async fn run(config_store: &Arc<ConfigStore>) -> Result<()> {
         sm.next();
     }
 
-    // Remaining steps added in subsequent tasks
+    // Step 3: Relay
+    step_relay(&mut config, &mut launcher, config_store)?;
+    sm.next();
+
+    // Step 4: Providers
+    step_providers(&mut providers, config_store).await?;
+    sm.next();
+
+    // Step 5: LLMs
+    step_llms(&providers, config_store)?;
+    sm.next();
+
+    // Steps 6-9 coming soon
     display::blank();
-    display::context("Remaining steps coming soon.");
+    display::context("Steps 6-9 coming soon.");
     display::blank();
     display::success("Setup complete!");
     Ok(())
@@ -116,6 +129,196 @@ fn step_openclaw(providers: &mut TenexProviders, store: &Arc<ConfigStore>) -> Re
         display::success(&format!("Imported {} provider credentials.", count));
     } else {
         display::context("Skipped import.");
+    }
+
+    Ok(())
+}
+
+fn step_relay(
+    config: &mut TenexConfig,
+    launcher: &mut LauncherConfig,
+    store: &Arc<ConfigStore>,
+) -> Result<()> {
+    display::section("Relay");
+    display::context("The relay connects you to the Nostr network where your agents communicate.");
+    display::blank();
+
+    let choices = vec![
+        "Remote relay — connect to a relay server",
+        "Local relay — run a relay on this machine",
+    ];
+    let selection = Select::new()
+        .with_prompt(format!(
+            "{} How should TENEX connect to Nostr?",
+            style("?").blue().bold()
+        ))
+        .items(&choices)
+        .default(0)
+        .interact()?;
+
+    if selection == 0 {
+        let url: String = Input::new()
+            .with_prompt(format!("{} Relay URL", style("?").blue().bold()))
+            .default("wss://tenex.chat".into())
+            .interact_text()?;
+
+        build_relay_config(config, launcher, RelayMode::Remote, &url, false);
+    } else {
+        let ngrok = Confirm::new()
+            .with_prompt(format!(
+                "{} Enable ngrok tunnel for mobile access?",
+                style("?").blue().bold()
+            ))
+            .default(false)
+            .interact()?;
+
+        build_relay_config(config, launcher, RelayMode::Local, "", ngrok);
+    }
+
+    store.save_config(config)?;
+    store.save_launcher(launcher)?;
+
+    let relay_desc = config
+        .relays
+        .as_ref()
+        .and_then(|r| r.first())
+        .map(|s| s.as_str())
+        .unwrap_or("configured");
+    display::success(&format!("Relay configured: {}", relay_desc));
+    Ok(())
+}
+
+async fn step_providers(providers: &mut TenexProviders, store: &Arc<ConfigStore>) -> Result<()> {
+    display::section("Providers");
+    display::context("These are the AI services your agents will use.");
+    display::blank();
+
+    // Auto-detect providers from environment and local commands
+    provider::auto_connect_detected(providers).await;
+
+    // Show what's connected
+    let display_names = provider::provider_display_names();
+    if !providers.providers.is_empty() {
+        println!("  Connected:");
+        for (id, entry) in &providers.providers {
+            let name = display_names
+                .get(id.as_str())
+                .copied()
+                .unwrap_or(id.as_str());
+            let masked = display::mask_key(entry.primary_key().unwrap_or("none"));
+            println!(
+                "    {} {:<16}{}",
+                style("✓").green(),
+                name,
+                style(masked).dim()
+            );
+        }
+        display::blank();
+    }
+
+    loop {
+        let mut choices = vec!["Skip — looks good".to_string()];
+        for &provider_id in provider::PROVIDER_LIST_ORDER {
+            if !providers.providers.contains_key(provider_id) {
+                let name = display_names
+                    .get(provider_id)
+                    .copied()
+                    .unwrap_or(provider_id);
+                let subtitle = provider::provider_subtitle(provider_id, false, None, 0);
+                choices.push(format!("{} — {}", name, subtitle));
+            }
+        }
+
+        if choices.len() == 1 {
+            display::context("All known providers are connected.");
+            break;
+        }
+
+        let selection = Select::new()
+            .with_prompt(format!("{} Add a provider?", style("?").blue().bold()))
+            .items(&choices)
+            .default(0)
+            .interact()?;
+
+        if selection == 0 {
+            break;
+        }
+
+        // Map selection back to provider ID
+        let mut unconnected: Vec<&str> = Vec::new();
+        for &provider_id in provider::PROVIDER_LIST_ORDER {
+            if !providers.providers.contains_key(provider_id) {
+                unconnected.push(provider_id);
+            }
+        }
+        let provider_id = unconnected[selection - 1];
+
+        if provider::requires_api_key(provider_id) {
+            let api_key: String = Password::new()
+                .with_prompt(format!(
+                    "{} {} API key",
+                    style("?").blue().bold(),
+                    display_names
+                        .get(provider_id)
+                        .copied()
+                        .unwrap_or(provider_id)
+                ))
+                .interact()?;
+
+            providers
+                .providers
+                .insert(provider_id.to_string(), ProviderEntry::new(api_key));
+        } else {
+            providers
+                .providers
+                .insert(provider_id.to_string(), ProviderEntry::new("none"));
+        }
+
+        store.save_providers(providers)?;
+        let name = display_names
+            .get(provider_id)
+            .copied()
+            .unwrap_or(provider_id);
+        display::success(&format!("{} connected.", name));
+    }
+
+    store.save_providers(providers)?;
+    Ok(())
+}
+
+fn step_llms(providers: &TenexProviders, store: &Arc<ConfigStore>) -> Result<()> {
+    display::section("LLMs");
+
+    let mut llms = store.load_llms();
+    let seeded = seed_default_llms(&mut llms, providers);
+
+    if seeded {
+        display::context("Here are the model configs I've set up based on your providers:");
+        display::blank();
+        for (name, config) in &llms.configurations {
+            display::config_item(name, &config.display_model(), config.provider());
+        }
+        display::blank();
+
+        let keep = Confirm::new()
+            .with_prompt(format!(
+                "{} Continue with these defaults?",
+                style("?").blue().bold()
+            ))
+            .default(true)
+            .interact()?;
+
+        if keep {
+            store.save_llms(&llms)?;
+            display::success("LLM configs saved.");
+        } else {
+            display::context("You can configure models in Settings > LLMs after setup.");
+            store.save_llms(&llms)?;
+        }
+    } else if llms.configurations.is_empty() {
+        display::context("No providers connected — you can configure models later in Settings.");
+    } else {
+        display::context("Existing LLM configurations found. Keeping them.");
     }
 
     Ok(())

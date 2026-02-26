@@ -115,7 +115,12 @@ struct OnboardingView: View {
 
                 switch step {
                 case .identity:
-                    if identityPath == .create {
+                    if identityCompleted {
+                        Button("Continue") {
+                            step = .relay
+                        }
+                        .keyboardShortcut(.defaultAction)
+                    } else if identityPath == .create {
                         Button("Continue") {
                             storeKeyAndComplete()
                         }
@@ -127,11 +132,6 @@ struct OnboardingView: View {
                         }
                         .keyboardShortcut(.defaultAction)
                         .disabled(nsecInput.isEmpty || isProcessing)
-                    } else if identityCompleted {
-                        Button("Continue") {
-                            step = .relay
-                        }
-                        .keyboardShortcut(.defaultAction)
                     }
                 case .relay:
                     Button("Continue") {

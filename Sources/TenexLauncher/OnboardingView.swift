@@ -45,7 +45,6 @@ struct OnboardingView: View {
 
     // OpenClaw import state
     @State private var openClawDetected: OpenClawDetected? = nil
-    @State private var agentImportRunning = false
 
     // Relay state
     @State private var relayMode: RelayMode = .remote
@@ -579,10 +578,8 @@ struct OnboardingView: View {
         seedDefaultLLMConfigs()
 
         // Launch agent import in background (fire and forget)
-        agentImportRunning = true
-        Task {
+        Task.detached {
             await runOpenClawAgentImport()
-            agentImportRunning = false
         }
     }
 

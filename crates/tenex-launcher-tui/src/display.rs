@@ -1,8 +1,4 @@
-use console::{style, Term};
-
-pub fn term() -> Term {
-    Term::stderr()
-}
+use console::style;
 
 /// Print a section header with separator line.
 ///   ─── Identity ───────────────────────
@@ -32,11 +28,13 @@ pub fn success(text: &str) {
 }
 
 /// Print a warning message.
+#[allow(dead_code)]
 pub fn warn(text: &str) {
     println!("  {} {}", style("⚠").yellow(), text);
 }
 
 /// Print an error message.
+#[allow(dead_code)]
 pub fn error(text: &str) {
     println!("  {} {}", style("✗").red().bold(), text);
 }

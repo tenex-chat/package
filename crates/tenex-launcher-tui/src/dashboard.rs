@@ -21,7 +21,7 @@ pub async fn run(
     ngrok: &Arc<NgrokManager>,
 ) -> Result<()> {
     loop {
-        print_status(config_store, daemon, relay, ngrok);
+        print_status(config_store, daemon, relay, ngrok).await;
 
         let choices = vec![
             "Check status",
@@ -47,7 +47,7 @@ pub async fn run(
     Ok(())
 }
 
-fn print_status(
+async fn print_status(
     config_store: &Arc<ConfigStore>,
     daemon: &Arc<DaemonManager>,
     relay: &Arc<RelayManager>,
@@ -63,20 +63,24 @@ fn print_status(
         .map(|s| s.as_str())
         .unwrap_or("not configured");
 
+    let daemon_status = daemon.status().await;
+    let relay_status = relay.status().await;
+    let ngrok_status = ngrok.status().await;
+
     display::service_status(
         "daemon",
-        daemon.status() == ProcessStatus::Running,
-        &format_process_detail(daemon.status()),
+        daemon_status == ProcessStatus::Running,
+        &format_process_detail(daemon_status),
     );
     display::service_status(
         "relay",
-        relay.status() == ProcessStatus::Running,
+        relay_status == ProcessStatus::Running,
         relay_url,
     );
     display::service_status(
         "ngrok",
-        ngrok.status() == ProcessStatus::Running,
-        if ngrok.status() == ProcessStatus::Running {
+        ngrok_status == ProcessStatus::Running,
+        if ngrok_status == ProcessStatus::Running {
             "tunnel active"
         } else {
             "start it to expose your agent"
@@ -100,9 +104,9 @@ async fn handle_services(
     ngrok: &Arc<NgrokManager>,
 ) -> Result<()> {
     let statuses = [
-        ("daemon", daemon.status()),
-        ("relay", relay.status()),
-        ("ngrok", ngrok.status()),
+        ("daemon", daemon.status().await),
+        ("relay", relay.status().await),
+        ("ngrok", ngrok.status().await),
     ];
 
     let choices: Vec<String> = statuses

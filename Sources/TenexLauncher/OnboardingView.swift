@@ -3,7 +3,7 @@ import AppKit
 
 struct OnboardingView: View {
     @ObservedObject var store: ConfigStore
-    @ObservedObject var coreManager: TenexCoreManager
+    let coreManager: TenexCoreManager
     @ObservedObject var relayManager: RelayManager
 
     @State private var step: OnboardingStep = .identity
@@ -539,9 +539,11 @@ struct OnboardingView: View {
 
     private var mobileSetupStepView: some View {
         VStack(spacing: 20) {
+            let configuredRelay = store.config.relays?.first
+            let relayForQRCode = mobileQRCodeRelay
             let setupURL = QRCodeGenerator.mobileSetupURL(
                 nsec: generatedNsec,
-                relay: store.config.relays?.first,
+                relay: relayForQRCode,
                 backendPubkey: store.config.tenexPublicKey
             )
 
@@ -554,7 +556,7 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
-            } else {
+            } else if let relayForQRCode {
                 if let qrImage = QRCodeGenerator.generate(from: setupURL) {
                     Image(nsImage: qrImage)
                         .interpolation(.none)
@@ -564,15 +566,13 @@ struct OnboardingView: View {
                 }
 
                 VStack(spacing: 4) {
-                    if let relay = store.config.relays?.first {
-                        HStack(spacing: 4) {
-                            Text("Relay:")
-                                .foregroundStyle(.secondary)
-                            Text(relay)
-                                .font(.system(.caption, design: .monospaced))
-                        }
-                        .font(.caption)
+                    HStack(spacing: 4) {
+                        Text("Relay:")
+                            .foregroundStyle(.secondary)
+                        Text(relayForQRCode)
+                            .font(.system(.caption, design: .monospaced))
                     }
+                    .font(.caption)
                     if let pubkey = store.config.tenexPublicKey {
                         HStack(spacing: 4) {
                             Text("Backend:")
@@ -601,11 +601,37 @@ struct OnboardingView: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "iphone.slash")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.secondary)
+
+                    if store.config.localRelay?.enabled == true {
+                        if store.config.localRelay?.ngrokEnabled == true {
+                            Text("Local relay is configured with ngrok, but the public relay URL is created after setup. Finish setup, then open Mobile to scan a QR code with the ngrok URL.")
+                        } else {
+                            Text("Local relay is using localhost, which your iPhone cannot reach. Finish setup, then open Mobile to enable ngrok and generate a QR code.")
+                        }
+                    } else if let configuredRelay, QRCodeGenerator.isLoopbackRelay(configuredRelay) {
+                        Text("Configured relay \(configuredRelay) is not reachable from iPhone. Use a public relay URL or ngrok.")
+                    } else {
+                        Text("QR code not available. Configure a mobile-reachable relay first.")
+                    }
+                }
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
             }
 
             Spacer()
         }
         .padding(.top, 24)
+    }
+
+    private var mobileQRCodeRelay: String? {
+        guard let relay = store.config.relays?.first else { return nil }
+        return QRCodeGenerator.isLoopbackRelay(relay) ? nil : relay
     }
 
     // MARK: - Actions

@@ -57,8 +57,9 @@ enum SidebarTab: String, Identifiable {
 struct MainWindow: View {
     @ObservedObject var daemon: DaemonManager
     @ObservedObject var configStore: ConfigStore
-    @ObservedObject var coreManager: TenexCoreManager
+    let coreManager: TenexCoreManager
     @ObservedObject var relayManager: RelayManager
+    @ObservedObject var ngrokManager: NgrokManager
     @ObservedObject var negentropySync: NegentropySync
     @ObservedObject var pendingEventsQueue: PendingEventsQueue
 
@@ -99,7 +100,7 @@ struct MainWindow: View {
                     case .llms:
                         LLMsView(store: configStore)
                     case .mobile:
-                        MobileSetupView(store: configStore)
+                        MobileSetupView(store: configStore, ngrokManager: ngrokManager)
                     case .identity, .network, .relay, .embeddings, .imageGeneration, .agents, .conversations, .app, .prompt, .roles:
                         GeneralConfigView(
                             store: configStore,

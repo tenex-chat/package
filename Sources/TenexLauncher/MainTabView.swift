@@ -8,8 +8,12 @@ enum AppSection: String, CaseIterable, Identifiable {
     case reports
     case inbox
     case search
+    case stats
+    case diagnostics
     case teams
     case agentDefinitions
+    case nudges
+    case settings
 
     var id: String { rawValue }
 
@@ -20,8 +24,12 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .reports: return "Reports"
         case .inbox: return "Inbox"
         case .search: return "Search"
+        case .stats: return "LLM Runtime"
+        case .diagnostics: return "Diagnostics"
         case .teams: return "Teams"
         case .agentDefinitions: return "Agent Definitions"
+        case .nudges: return "Nudges"
+        case .settings: return "Settings"
         }
     }
 
@@ -32,8 +40,12 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .reports: return "doc.richtext"
         case .inbox: return "tray"
         case .search: return "magnifyingglass"
+        case .stats: return "clock"
+        case .diagnostics: return "gauge.with.needle"
         case .teams: return "person.2"
         case .agentDefinitions: return "person.3.sequence"
+        case .nudges: return "forward.circle"
+        case .settings: return "gearshape"
         }
     }
 
@@ -49,46 +61,15 @@ enum AppSection: String, CaseIterable, Identifiable {
 struct MainTabView: View {
     @Binding var userNpub: String
     @Binding var isLoggedIn: Bool
-    @EnvironmentObject var coreManager: TenexCoreManager
-
-    @State private var showAISettings = false
-    @State private var showDiagnostics = false
-    @State private var showStats = false
+    @Environment(TenexCoreManager.self) var coreManager
 
     var body: some View {
         MainShellView(
             userNpub: $userNpub,
             isLoggedIn: $isLoggedIn,
-            runtimeText: coreManager.runtimeText,
-            onShowSettings: { showAISettings = true },
-            onShowDiagnostics: { showDiagnostics = true },
-            onShowStats: { showStats = true }
+            runtimeText: coreManager.runtimeText
         )
-        .environmentObject(coreManager)
+        .environment(coreManager)
         .nowPlayingInset(coreManager: coreManager)
-        .sheet(isPresented: $showAISettings) {
-            AppSettingsView(defaultSection: .audio)
-                .frame(minWidth: 500, idealWidth: 520, minHeight: 500, idealHeight: 600)
-        }
-        .sheet(isPresented: $showDiagnostics) {
-            NavigationStack {
-                DiagnosticsView(coreManager: coreManager)
-                    .toolbar {
-                        ToolbarItem(placement: .automatic) {
-                            Button("Done") { showDiagnostics = false }
-                        }
-                    }
-            }
-        }
-        .sheet(isPresented: $showStats) {
-            NavigationStack {
-                StatsView(coreManager: coreManager)
-                    .toolbar {
-                        ToolbarItem(placement: .automatic) {
-                            Button("Done") { showStats = false }
-                        }
-                    }
-            }
-        }
     }
 }

@@ -54,7 +54,13 @@ struct OpenClawDetector {
         else { return [] }
 
         var credentials: [OpenClawCredential] = []
-        for (_, profile) in file.profiles {
+        let sortedProfiles = file.profiles.sorted { lhs, rhs in
+            let lhsDefault = lhs.key.hasSuffix(":default")
+            let rhsDefault = rhs.key.hasSuffix(":default")
+            if lhsDefault != rhsDefault { return lhsDefault }
+            return lhs.key < rhs.key
+        }
+        for (_, profile) in sortedProfiles {
             let key: String?
             switch profile.type {
             case "token":   key = profile.token
@@ -62,10 +68,10 @@ struct OpenClawDetector {
             case "oauth":   key = profile.access
             default:        key = nil
             }
-            guard let apiKey = key, !apiKey.isEmpty else { continue }
-            // One credential per provider (take the first)
-            guard !credentials.contains(where: { $0.provider == profile.provider }) else { continue }
-            credentials.append(OpenClawCredential(provider: profile.provider, apiKey: apiKey))
+            guard let provider = profile.provider,
+                  let apiKey = key, !apiKey.isEmpty else { continue }
+            guard !credentials.contains(where: { $0.provider == provider }) else { continue }
+            credentials.append(OpenClawCredential(provider: provider, apiKey: apiKey))
         }
         return credentials
     }
@@ -82,7 +88,7 @@ struct OpenClawDetector {
         return nil
     }
 
-    static func convertModelFormat(_ model: String) -> String {
+    private static func convertModelFormat(_ model: String) -> String {
         guard let idx = model.firstIndex(of: "/") else { return model }
         var result = model
         result.replaceSubrange(idx...idx, with: ":")
@@ -98,7 +104,7 @@ private struct AuthProfilesFile: Decodable {
 
 private struct AuthProfile: Decodable {
     let type: String
-    let provider: String
+    let provider: String?
     var token: String?
     var key: String?
     var access: String?

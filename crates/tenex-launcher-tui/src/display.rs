@@ -27,18 +27,6 @@ pub fn success(text: &str) {
     println!("  {} {}", style("✓").green().bold(), text);
 }
 
-/// Print a warning message.
-#[allow(dead_code)]
-pub fn warn(text: &str) {
-    println!("  {} {}", style("⚠").yellow(), text);
-}
-
-/// Print an error message.
-#[allow(dead_code)]
-pub fn error(text: &str) {
-    println!("  {} {}", style("✗").red().bold(), text);
-}
-
 /// Print a status line: service  ● running  detail
 pub fn service_status(name: &str, running: bool, detail: &str) {
     let (indicator, status_text) = if running {

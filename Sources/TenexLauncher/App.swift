@@ -5,7 +5,7 @@ import SwiftUI
 struct TenexLauncherApp: App {
     @StateObject private var daemon = DaemonManager()
     @StateObject private var configStore = ConfigStore()
-    @StateObject private var coreManager = TenexCoreManager()
+    @State private var coreManager = TenexCoreManager()
     @StateObject private var relayManager = RelayManager()
     @StateObject private var ngrokManager = NgrokManager()
     @StateObject private var negentropySync = NegentropySync()
@@ -39,6 +39,7 @@ struct TenexLauncherApp: App {
                 configStore: configStore,
                 coreManager: coreManager,
                 relayManager: relayManager,
+                ngrokManager: ngrokManager,
                 negentropySync: negentropySync,
                 pendingEventsQueue: pendingEventsQueue
             )
@@ -75,14 +76,14 @@ struct TenexLauncherApp: App {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if isLoggedIn {
                     MainTabView(userNpub: $userNpub, isLoggedIn: $isLoggedIn)
-                        .environmentObject(coreManager)
+                        .environment(coreManager)
                 } else {
                     LoginView(
                         isLoggedIn: $isLoggedIn,
                         userNpub: $userNpub,
                         autoLoginError: autoLoginError
                     )
-                    .environmentObject(coreManager)
+                    .environment(coreManager)
                 }
             }
             .frame(minWidth: 800, minHeight: 600)

@@ -26,4 +26,21 @@ enum QRCodeGenerator {
         components.queryItems = items
         return components.url?.absoluteString ?? ""
     }
+
+    static func isLoopbackRelay(_ relay: String?) -> Bool {
+        guard let relay else { return false }
+
+        guard let components = URLComponents(string: relay),
+              let host = components.host?.lowercased() else {
+            let lowered = relay.lowercased()
+            return lowered.contains("localhost")
+                || lowered.contains("127.0.0.1")
+                || lowered.contains("[::1]")
+                || lowered.contains("::1")
+        }
+
+        if host == "localhost" || host == "::1" { return true }
+        if host == "127.0.0.1" || host.hasPrefix("127.") { return true }
+        return false
+    }
 }

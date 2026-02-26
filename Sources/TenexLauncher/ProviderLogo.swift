@@ -33,13 +33,13 @@ struct ProviderLogo: View {
         }
         .frame(width: size, height: size)
         .task(id: provider) {
-            self.image = await ProviderLogoCache.shared.logo(for: provider)
+            self.image = await LauncherProviderLogoCache.shared.logo(for: provider)
         }
     }
 }
 
-actor ProviderLogoCache {
-    static let shared = ProviderLogoCache()
+private actor LauncherProviderLogoCache {
+    static let shared = LauncherProviderLogoCache()
 
     private var cache: [String: NSImage] = [:]
 

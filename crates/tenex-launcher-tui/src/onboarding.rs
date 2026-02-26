@@ -41,11 +41,20 @@ pub async fn run(config_store: &Arc<ConfigStore>) -> Result<()> {
     step_llms(&providers, config_store)?;
     sm.next();
 
-    // Steps 6-9 coming soon
-    display::blank();
-    display::context("Steps 6-9 coming soon.");
-    display::blank();
-    display::success("Setup complete!");
+    // Step 6: First Project
+    step_first_project(&config)?;
+    sm.next();
+
+    // Step 7: Hire Agents (stub)
+    step_hire_agents()?;
+    sm.next();
+
+    // Step 8: Nudges & Skills (stub)
+    step_nudges_skills()?;
+    sm.next();
+
+    // Step 9: Done
+    step_done(&config, &providers)?;
     Ok(())
 }
 
@@ -283,6 +292,99 @@ async fn step_providers(providers: &mut TenexProviders, store: &Arc<ConfigStore>
     }
 
     store.save_providers(providers)?;
+    Ok(())
+}
+
+fn step_first_project(config: &TenexConfig) -> Result<()> {
+    display::section("Your First Project");
+    display::context("TENEX organizes work into projects. Each project is a container");
+    display::context("for a team of AI agents focused on a shared concern.");
+    display::context("Agents can belong to multiple projects and collaborate across them.");
+    display::blank();
+    display::context("We recommend starting with a \"Meta\" project — a project about");
+    display::context("managing your other projects. Think of it as your command center.");
+    display::blank();
+
+    let create = Confirm::new()
+        .with_prompt(format!(
+            "{} Create your Meta project?",
+            style("?").blue().bold()
+        ))
+        .default(true)
+        .interact()?;
+
+    if create {
+        let projects_base = config.projects_base.clone().unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join("tenex")
+                .to_string_lossy()
+                .into()
+        });
+        let meta_dir = std::path::Path::new(&projects_base).join("meta");
+        std::fs::create_dir_all(&meta_dir).ok();
+        display::success(
+            "Created project \"meta\". The daemon will publish it to Nostr on first start.",
+        );
+    } else {
+        display::context("You can create projects later from the dashboard.");
+    }
+
+    Ok(())
+}
+
+fn step_hire_agents() -> Result<()> {
+    display::section("Hiring Agents");
+    display::context("Agents are AI personas with specific roles and skills.");
+    display::context("You can browse and hire agents from the Nostr network.");
+    display::blank();
+    display::context("Agent discovery requires the daemon to be running.");
+    display::context("You can hire agents after setup from the dashboard.");
+    display::blank();
+    display::success("Skipping agent hiring for now — available after first launch.");
+
+    Ok(())
+}
+
+fn step_nudges_skills() -> Result<()> {
+    display::section("Nudges & Skills");
+    display::context("Nudges shape how your agents behave — like standing instructions.");
+    display::context("Skills give them specific capabilities they can reach for when needed.");
+    display::blank();
+    display::context("Nudge and skill discovery requires the daemon to be running.");
+    display::context("You can configure these after setup from Settings.");
+    display::blank();
+    display::success("Skipping for now — available after first launch.");
+
+    Ok(())
+}
+
+fn step_done(config: &TenexConfig, providers: &TenexProviders) -> Result<()> {
+    display::section("Done");
+    display::blank();
+
+    if let Some(relays) = &config.relays {
+        if let Some(url) = relays.first() {
+            println!("  {:<16}{}", style("Relay:").dim(), url);
+        }
+    }
+
+    let provider_names: Vec<&str> = providers
+        .providers
+        .keys()
+        .map(|s| s.as_str())
+        .collect();
+    if !provider_names.is_empty() {
+        println!(
+            "  {:<16}{}",
+            style("Providers:").dim(),
+            provider_names.join(", ")
+        );
+    }
+
+    display::blank();
+    display::success("Setup complete! Starting dashboard...");
+    display::blank();
     Ok(())
 }
 

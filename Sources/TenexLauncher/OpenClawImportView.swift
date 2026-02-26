@@ -51,7 +51,7 @@ struct OpenClawImportView: View {
     }
 
     private func credentialLabel(_ c: OpenClawCredential) -> String {
-        "\(c.provider.prefix(1).uppercased() + c.provider.dropFirst()) API key"
+        c.provider.capitalized + " API key"
     }
 
     private func importCard(icon: String, title: String, items: [String]) -> some View {

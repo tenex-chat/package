@@ -470,32 +470,27 @@ fn settings_intervention(store: &Arc<ConfigStore>) -> Result<()> {
             .default(intervention.agent.unwrap_or_default())
             .interact_text()?;
 
-        let timeout: String = Input::new()
+        let timeout: u64 = Input::new()
             .with_prompt(format!(
                 "{} Review timeout (ms)",
                 style("?").blue().bold()
             ))
-            .default(intervention.review_timeout.unwrap_or(300000).to_string())
+            .default(intervention.review_timeout.unwrap_or(300000))
             .interact_text()?;
 
-        let skip_within: String = Input::new()
+        let skip_within: u64 = Input::new()
             .with_prompt(format!(
                 "{} Skip if active within (seconds)",
                 style("?").blue().bold()
             ))
-            .default(
-                intervention
-                    .skip_if_active_within
-                    .unwrap_or(120)
-                    .to_string(),
-            )
+            .default(intervention.skip_if_active_within.unwrap_or(120))
             .interact_text()?;
 
         config.intervention = Some(InterventionConfig {
             enabled: Some(true),
             agent: Some(agent),
-            review_timeout: timeout.parse().ok(),
-            skip_if_active_within: skip_within.parse().ok(),
+            review_timeout: Some(timeout),
+            skip_if_active_within: Some(skip_within),
         });
     } else {
         config.intervention = Some(InterventionConfig {
@@ -590,9 +585,9 @@ fn settings_local_relay(store: &Arc<ConfigStore>) -> Result<()> {
         .interact()?;
 
     if enabled {
-        let port: String = Input::new()
+        let port: u16 = Input::new()
             .with_prompt(format!("{} Port", style("?").blue().bold()))
-            .default(lr.port.unwrap_or(7777).to_string())
+            .default(lr.port.unwrap_or(7777))
             .interact_text()?;
 
         let ngrok = Confirm::new()
@@ -606,7 +601,7 @@ fn settings_local_relay(store: &Arc<ConfigStore>) -> Result<()> {
         launcher.local_relay = Some(LocalRelayConfig {
             enabled: Some(true),
             auto_start: Some(true),
-            port: port.parse().ok(),
+            port: Some(port),
             ngrok_enabled: Some(ngrok),
             ..lr
         });
@@ -647,32 +642,32 @@ fn settings_compression(store: &Arc<ConfigStore>) -> Result<()> {
         .interact()?;
 
     if enabled {
-        let threshold: String = Input::new()
+        let threshold: u64 = Input::new()
             .with_prompt(format!(
                 "{} Token threshold",
                 style("?").blue().bold()
             ))
-            .default(comp.token_threshold.unwrap_or(50000).to_string())
+            .default(comp.token_threshold.unwrap_or(50000))
             .interact_text()?;
 
-        let budget: String = Input::new()
+        let budget: u64 = Input::new()
             .with_prompt(format!("{} Token budget", style("?").blue().bold()))
-            .default(comp.token_budget.unwrap_or(40000).to_string())
+            .default(comp.token_budget.unwrap_or(40000))
             .interact_text()?;
 
-        let window: String = Input::new()
+        let window: u64 = Input::new()
             .with_prompt(format!(
                 "{} Sliding window size",
                 style("?").blue().bold()
             ))
-            .default(comp.sliding_window_size.unwrap_or(50).to_string())
+            .default(comp.sliding_window_size.unwrap_or(50))
             .interact_text()?;
 
         config.compression = Some(CompressionConfig {
             enabled: Some(true),
-            token_threshold: threshold.parse().ok(),
-            token_budget: budget.parse().ok(),
-            sliding_window_size: window.parse().ok(),
+            token_threshold: Some(threshold),
+            token_budget: Some(budget),
+            sliding_window_size: Some(window),
         });
     } else {
         config.compression = Some(CompressionConfig {
@@ -697,16 +692,16 @@ fn settings_summarization(store: &Arc<ConfigStore>) -> Result<()> {
     );
     display::blank();
 
-    let timeout: String = Input::new()
+    let timeout: u64 = Input::new()
         .with_prompt(format!(
             "{} Inactivity timeout (ms)",
             style("?").blue().bold()
         ))
-        .default(summ.inactivity_timeout.unwrap_or(300000).to_string())
+        .default(summ.inactivity_timeout.unwrap_or(300000))
         .interact_text()?;
 
     config.summarization = Some(SummarizationConfig {
-        inactivity_timeout: timeout.parse().ok(),
+        inactivity_timeout: Some(timeout),
     });
     store.save_config(&config)?;
     display::success("Summarization config saved.");
@@ -783,8 +778,9 @@ fn settings_system_prompt(store: &Arc<ConfigStore>) -> Result<()> {
     display::section("System Prompt");
     println!("  Enabled: {}", prompt.enabled.unwrap_or(false));
     if let Some(content) = &prompt.content {
-        let preview = if content.len() > 80 {
-            format!("{}...", &content[..80])
+        let preview = if content.chars().count() > 80 {
+            let truncated: String = content.chars().take(80).collect();
+            format!("{}...", truncated)
         } else {
             content.clone()
         };

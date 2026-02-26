@@ -5,6 +5,7 @@ import SwiftUI
 enum AppSection: String, CaseIterable, Identifiable {
     case chats
     case projects
+    case agents
     case reports
     case inbox
     case search
@@ -21,6 +22,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         switch self {
         case .chats: return "Chats"
         case .projects: return "Projects"
+        case .agents: return "Agents"
         case .reports: return "Reports"
         case .inbox: return "Inbox"
         case .search: return "Search"
@@ -37,6 +39,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         switch self {
         case .chats: return "bubble.left.and.bubble.right"
         case .projects: return "folder"
+        case .agents: return "cpu"
         case .reports: return "doc.richtext"
         case .inbox: return "tray"
         case .search: return "magnifyingglass"

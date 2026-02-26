@@ -10,6 +10,7 @@ struct OnboardingView: View {
 
     enum OnboardingStep {
         case identity
+        case openclawImport
         case relay
         case providers
         case llms
@@ -41,6 +42,10 @@ struct OnboardingView: View {
         "notionists-neutral", "open-peeps", "personas", "shapes", "thumbs"
     ]
     @State private var avatarWindowStart = 0
+
+    // OpenClaw import state
+    @State private var openClawDetected: OpenClawDetected? = nil
+    @State private var agentImportRunning = false
 
     // Relay state
     @State private var relayMode: RelayMode = .remote
@@ -75,6 +80,10 @@ struct OnboardingView: View {
                 switch step {
                 case .identity:
                     identityStepView
+                case .openclawImport:
+                    if let detected = openClawDetected {
+                        OpenClawImportView(detected: detected)
+                    }
                 case .relay:
                     relayStepView
                 case .providers:
@@ -106,7 +115,8 @@ struct OnboardingView: View {
                         case .mobileSetup: step = .llms
                         case .llms: step = .providers
                         case .providers: step = .relay
-                        case .relay: step = .identity
+                        case .relay: step = openClawDetected != nil ? .openclawImport : .identity
+                        case .openclawImport: step = .identity
                         }
                     }
                 }
@@ -117,7 +127,7 @@ struct OnboardingView: View {
                 case .identity:
                     if identityCompleted {
                         Button("Continue") {
-                            step = .relay
+                            step = openClawDetected != nil ? .openclawImport : .relay
                         }
                         .keyboardShortcut(.defaultAction)
                     } else if identityPath == .create {
@@ -133,6 +143,17 @@ struct OnboardingView: View {
                         .keyboardShortcut(.defaultAction)
                         .disabled(nsecInput.isEmpty || isProcessing)
                     }
+                case .openclawImport:
+                    Button("Skip") {
+                        step = .relay
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Import & Continue") {
+                        applyOpenClawImport()
+                        step = .relay
+                    }
+                    .keyboardShortcut(.defaultAction)
                 case .relay:
                     Button("Continue") {
                         saveRelayConfig()
@@ -175,6 +196,12 @@ struct OnboardingView: View {
                     window.center()
                 }
             }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let detected = OpenClawDetector.detect()
+                DispatchQueue.main.async {
+                    openClawDetected = detected
+                }
+            }
         }
     }
 
@@ -182,6 +209,8 @@ struct OnboardingView: View {
         switch step {
         case .identity:
             "Set up your Nostr identity to get started."
+        case .openclawImport:
+            "Import your existing OpenClaw configuration."
         case .relay:
             "Choose how to connect to the Nostr network."
         case .providers:
@@ -533,6 +562,91 @@ struct OnboardingView: View {
                 ngrokEnabled: ngrokEnabled
             )
         }
+    }
+
+    // MARK: - OpenClaw Import
+
+    private func applyOpenClawImport() {
+        guard let detected = openClawDetected else { return }
+
+        // Write credentials
+        for credential in detected.credentials {
+            store.providers.providers[credential.provider] = ProviderEntry(apiKey: credential.apiKey)
+        }
+        store.saveProviders()
+
+        // Seed LLM configs from newly added providers (reuses existing logic)
+        seedDefaultLLMConfigs()
+
+        // Launch agent import in background (fire and forget)
+        agentImportRunning = true
+        Task {
+            await runOpenClawAgentImport()
+            agentImportRunning = false
+        }
+    }
+
+    private func runOpenClawAgentImport() async {
+        guard let (executable, arguments) = resolveAgentImportExecutable() else { return }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+
+        var env = ProcessInfo.processInfo.environment
+        let nodeModulesBin = bundlePath("deps/backend/node_modules/.bin")
+        env["PATH"] = "\(nodeModulesBin):\(env["PATH"] ?? "")"
+        process.environment = env
+        process.currentDirectoryURL = URL(fileURLWithPath: bundlePath("deps/backend"))
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            process.terminationHandler = { _ in continuation.resume() }
+            do {
+                try process.run()
+            } catch {
+                continuation.resume()
+            }
+        }
+    }
+
+    private func resolveAgentImportExecutable() -> (path: String, arguments: [String])? {
+        let subcommand = ["agent", "import", "openclaw"]
+
+        if let bundled = Bundle.main.path(forResource: "tenex-daemon", ofType: nil) {
+            return (bundled, subcommand)
+        }
+
+        let depsCompiled = bundlePath("deps/backend/dist/tenex-daemon")
+        if FileManager.default.fileExists(atPath: depsCompiled) {
+            return (depsCompiled, subcommand)
+        }
+
+        if let bun = findBun() {
+            let entrypoint = bundlePath("deps/backend/src/index.ts")
+            if FileManager.default.fileExists(atPath: entrypoint) {
+                return (bun, ["run", entrypoint] + subcommand)
+            }
+        }
+
+        return nil
+    }
+
+    private func bundlePath(_ relative: String) -> String {
+        if let repoRoot = Bundle.main.infoDictionary?["TenexRepoRoot"] as? String {
+            return (repoRoot as NSString).appendingPathComponent(relative)
+        }
+        return (Bundle.main.resourcePath! as NSString).appendingPathComponent(relative)
+    }
+
+    private func findBun() -> String? {
+        let candidates = [
+            "/opt/homebrew/bin/bun",
+            "/usr/local/bin/bun",
+            "\(NSHomeDirectory())/.bun/bin/bun",
+        ]
+        return candidates.first { FileManager.default.fileExists(atPath: $0) }
     }
 
     // MARK: - Mobile Setup Step

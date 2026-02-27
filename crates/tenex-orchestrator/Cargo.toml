@@ -1,0 +1,30 @@
+[package]
+name = "tenex-orchestrator"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "tenex_orchestrator"
+path = "src/lib.rs"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+dirs.workspace = true
+tracing.workspace = true
+uniffi = { workspace = true, features = ["cli"] }
+async-trait.workspace = true
+libc = "0.2"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

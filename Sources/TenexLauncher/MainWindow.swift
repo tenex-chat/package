@@ -55,11 +55,8 @@ enum SidebarTab: String, Identifiable {
 }
 
 struct MainWindow: View {
-    @ObservedObject var daemon: DaemonManager
-    @ObservedObject var configStore: ConfigStore
+    @ObservedObject var orchestrator: OrchestratorManager
     let coreManager: TenexCoreManager
-    @ObservedObject var relayManager: RelayManager
-    @ObservedObject var ngrokManager: NgrokManager
     @ObservedObject var negentropySync: NegentropySync
     @ObservedObject var pendingEventsQueue: PendingEventsQueue
 
@@ -67,8 +64,8 @@ struct MainWindow: View {
 
     var body: some View {
         Group {
-            if configStore.needsOnboarding {
-                OnboardingView(store: configStore, coreManager: coreManager, relayManager: relayManager)
+            if orchestrator.needsOnboarding {
+                OnboardingView(orchestrator: orchestrator, coreManager: coreManager)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 NavigationSplitView {
@@ -94,17 +91,16 @@ struct MainWindow: View {
                 } detail: {
                     switch selectedTab {
                     case .daemon:
-                        DaemonView(daemon: daemon)
+                        DaemonView(orchestrator: orchestrator)
                     case .providers:
-                        ProvidersView(store: configStore)
+                        ProvidersView(orchestrator: orchestrator)
                     case .llms:
-                        LLMsView(store: configStore)
+                        LLMsView(orchestrator: orchestrator)
                     case .mobile:
-                        MobileSetupView(store: configStore, ngrokManager: ngrokManager)
+                        MobileSetupView(orchestrator: orchestrator)
                     case .identity, .network, .relay, .embeddings, .imageGeneration, .agents, .conversations, .app, .prompt, .roles:
                         GeneralConfigView(
-                            store: configStore,
-                            relayManager: relayManager,
+                            orchestrator: orchestrator,
                             negentropySync: negentropySync,
                             pendingEventsQueue: pendingEventsQueue,
                             tab: selectedTab

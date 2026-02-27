@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct LLMsView: View {
-    @ObservedObject var store: ConfigStore
+    @ObservedObject var orchestrator: OrchestratorManager
 
     @State private var showAddSheet = false
     @State private var selectedConfig: LLMConfigSelection?
@@ -12,7 +12,7 @@ struct LLMsView: View {
                 Text("Configurations")
                     .font(.headline)
 
-                if store.llms.configurations.isEmpty {
+                if orchestrator.llms.configurations.isEmpty {
                     ContentUnavailableView(
                         "No LLM Configurations",
                         systemImage: "cpu",
@@ -21,7 +21,7 @@ struct LLMsView: View {
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(sortedConfigKeys.enumerated()), id: \.element) { index, key in
-                            if let config = store.llms.configurations[key] {
+                            if let config = orchestrator.llms.configurations[key] {
                                 Button {
                                     selectedConfig = LLMConfigSelection(id: key)
                                 } label: {
@@ -57,11 +57,11 @@ struct LLMsView: View {
             }
         }
         .sheet(isPresented: $showAddSheet) {
-            AddLLMSheet(store: store, isPresented: $showAddSheet)
+            AddLLMSheet(orchestrator: orchestrator, isPresented: $showAddSheet)
         }
         .sheet(item: $selectedConfig) { selection in
             LLMConfigurationEditorSheet(
-                store: store,
+                orchestrator: orchestrator,
                 configName: selection.id,
                 providers: providerNames,
                 onDelete: {
@@ -73,22 +73,22 @@ struct LLMsView: View {
     }
 
     private var sortedConfigKeys: [String] {
-        store.llms.configurations.keys.sorted()
+        orchestrator.llms.configurations.keys.sorted()
     }
 
     private var providerNames: [String] {
-        Array(store.providers.providers.keys).sorted()
+        Array(orchestrator.providers.providers.keys).sorted()
     }
 
     private func removeConfig(_ key: String) {
-        store.llms.configurations.removeValue(forKey: key)
-        if store.llms.default == key { store.llms.default = nil }
-        if store.llms.summarization == key { store.llms.summarization = nil }
-        if store.llms.supervision == key { store.llms.supervision = nil }
-        if store.llms.search == key { store.llms.search = nil }
-        if store.llms.promptCompilation == key { store.llms.promptCompilation = nil }
-        if store.llms.compression == key { store.llms.compression = nil }
-        store.saveLLMs()
+        orchestrator.llms.configurations.removeValue(forKey: key)
+        if orchestrator.llms.default == key { orchestrator.llms.default = nil }
+        if orchestrator.llms.summarization == key { orchestrator.llms.summarization = nil }
+        if orchestrator.llms.supervision == key { orchestrator.llms.supervision = nil }
+        if orchestrator.llms.search == key { orchestrator.llms.search = nil }
+        if orchestrator.llms.promptCompilation == key { orchestrator.llms.promptCompilation = nil }
+        if orchestrator.llms.compression == key { orchestrator.llms.compression = nil }
+        orchestrator.saveLLMs()
     }
 }
 
@@ -161,7 +161,7 @@ private struct LLMConfigurationRow: View {
 }
 
 private struct LLMConfigurationEditorSheet: View {
-    @ObservedObject var store: ConfigStore
+    @ObservedObject var orchestrator: OrchestratorManager
     let configName: String
     let providers: [String]
     let onDelete: () -> Void
@@ -171,14 +171,14 @@ private struct LLMConfigurationEditorSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                if let config = store.llms.configurations[configName] {
+                if let config = orchestrator.llms.configurations[configName] {
                     switch config {
                     case .standard:
                         StandardLLMSection(
                             name: configName,
                             config: standardBinding,
                             providers: providers,
-                            providerEntries: store.providers.providers,
+                            providerEntries: orchestrator.providers.providers,
                             onDelete: onDelete
                         )
                     case .meta:
@@ -213,14 +213,14 @@ private struct LLMConfigurationEditorSheet: View {
     private var standardBinding: Binding<StandardLLM> {
         Binding(
             get: {
-                if case .standard(let standard) = store.llms.configurations[configName] {
+                if case .standard(let standard) = orchestrator.llms.configurations[configName] {
                     return standard
                 }
                 return StandardLLM(provider: "", model: "")
             },
             set: {
-                store.llms.configurations[configName] = .standard($0)
-                store.saveLLMs()
+                orchestrator.llms.configurations[configName] = .standard($0)
+                orchestrator.saveLLMs()
             }
         )
     }
@@ -228,14 +228,14 @@ private struct LLMConfigurationEditorSheet: View {
     private var metaBinding: Binding<MetaLLM> {
         Binding(
             get: {
-                if case .meta(let meta) = store.llms.configurations[configName] {
+                if case .meta(let meta) = orchestrator.llms.configurations[configName] {
                     return meta
                 }
                 return MetaLLM(provider: "meta", variants: [:], defaultVariant: "")
             },
             set: {
-                store.llms.configurations[configName] = .meta($0)
-                store.saveLLMs()
+                orchestrator.llms.configurations[configName] = .meta($0)
+                orchestrator.saveLLMs()
             }
         )
     }
@@ -426,7 +426,7 @@ struct RolePicker: View {
 // MARK: - Add Sheet
 
 struct AddLLMSheet: View {
-    @ObservedObject var store: ConfigStore
+    @ObservedObject var orchestrator: OrchestratorManager
     @Binding var isPresented: Bool
 
     @State private var name = ""
@@ -446,7 +446,7 @@ struct AddLLMSheet: View {
 
                 Picker("Provider", selection: $provider) {
                     Text("Select...").tag("")
-                    ForEach(Array(store.providers.providers.keys).sorted(), id: \.self) { p in
+                    ForEach(Array(orchestrator.providers.providers.keys).sorted(), id: \.self) { p in
                         Text(p).tag(p)
                     }
                 }
@@ -485,10 +485,10 @@ struct AddLLMSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Add") {
-                    store.llms.configurations[name] = .standard(
+                    orchestrator.llms.configurations[name] = .standard(
                         StandardLLM(provider: provider, model: model)
                     )
-                    store.saveLLMs()
+                    orchestrator.saveLLMs()
                     isPresented = false
                 }
                 .keyboardShortcut(.defaultAction)
@@ -519,7 +519,7 @@ struct AddLLMSheet: View {
         do {
             modelOptions = try await ModelCatalogService.fetchModels(
                 provider: provider,
-                providers: store.providers.providers
+                providers: orchestrator.providers.providers
             )
             if model.isEmpty, let first = modelOptions.first {
                 model = first

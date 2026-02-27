@@ -3,11 +3,13 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use tokio::process::Command;
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tracing::{error, info};
+
+use crate::config::ConfigStore;
 
 use super::{
     find_bun, graceful_shutdown, read_lines, which_exists, LogLine, ProcessManager, ProcessStatus,
@@ -22,6 +24,7 @@ use super::{
 /// 3. `tenex-daemon` on system PATH
 pub struct DaemonManager {
     repo_root: Option<PathBuf>,
+    config_store: Arc<ConfigStore>,
     status: Arc<RwLock<ProcessStatus>>,
     last_error: Arc<RwLock<Option<String>>>,
     logs: Arc<Mutex<VecDeque<LogLine>>>,
@@ -31,12 +34,13 @@ pub struct DaemonManager {
 }
 
 impl DaemonManager {
-    pub fn new(repo_root: Option<PathBuf>) -> Self {
+    pub fn new(repo_root: Option<PathBuf>, config_store: Arc<ConfigStore>) -> Self {
         let (status_tx, _) = broadcast::channel(64);
         let (log_tx, _) = broadcast::channel(256);
 
         Self {
             repo_root,
+            config_store,
             status: Arc::new(RwLock::new(ProcessStatus::Stopped)),
             last_error: Arc::new(RwLock::new(None)),
             logs: Arc::new(Mutex::new(VecDeque::with_capacity(MAX_LOG_LINES))),
@@ -133,9 +137,25 @@ impl ProcessManager for DaemonManager {
             }
         }
 
-        let (executable, arguments) = self.resolve_executable().context(
+        let (executable, mut arguments) = self.resolve_executable().context(
             "Cannot find tenex daemon binary. Looked for: deps/backend/dist/tenex-daemon, bun + deps/backend/src/index.ts",
         )?;
+
+        // The daemon enters interactive setup mode if whitelisted pubkeys or LLM
+        // configs are missing. Since we pipe stdin to null, that would hang forever.
+        // Validate upfront and give a clear error.
+        let config = self.config_store.load_config();
+        let pubkeys = config.whitelisted_pubkeys.as_deref().unwrap_or(&[]);
+        if pubkeys.is_empty() {
+            bail!("No whitelisted pubkeys configured. Complete onboarding first (Settings > Whitelist).");
+        }
+        arguments.push("--whitelist".into());
+        arguments.push(pubkeys.join(","));
+
+        let llms = self.config_store.load_llms();
+        if llms.configurations.is_empty() {
+            bail!("No LLM configurations found. Complete onboarding first (Settings > LLMs).");
+        }
 
         self.set_status(ProcessStatus::Starting);
         *self.last_error.write().await = None;
@@ -145,6 +165,7 @@ impl ProcessManager for DaemonManager {
 
         let mut cmd = Command::new(&executable);
         cmd.args(&arguments)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .envs(env)

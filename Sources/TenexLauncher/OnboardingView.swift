@@ -2,9 +2,8 @@ import SwiftUI
 import AppKit
 
 struct OnboardingView: View {
-    @ObservedObject var store: ConfigStore
+    @ObservedObject var orchestrator: OrchestratorManager
     let coreManager: TenexCoreManager
-    @ObservedObject var relayManager: RelayManager
 
     @State private var step: OnboardingStep = .identity
 
@@ -86,9 +85,9 @@ struct OnboardingView: View {
                 case .relay:
                     relayStepView
                 case .providers:
-                    ProvidersView(store: store)
+                    ProvidersView(orchestrator: orchestrator)
                 case .llms:
-                    LLMsView(store: store)
+                    LLMsView(orchestrator: orchestrator)
                 case .mobileSetup:
                     mobileSetupStepView
                 }
@@ -165,12 +164,12 @@ struct OnboardingView: View {
                         step = .llms
                     }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(store.providers.providers.isEmpty)
+                    .disabled(orchestrator.providers.providers.isEmpty)
                 case .llms:
                     Button("Continue") {
-                        store.config.launchAtLogin = launchAtLogin
+                        orchestrator.launcher.launchAtLogin = launchAtLogin
                         generateBackendKeyAndApprove()
-                        store.saveConfig()
+                        orchestrator.saveLauncher()
                         step = .mobileSetup
                     }
                     .keyboardShortcut(.defaultAction)
@@ -179,8 +178,9 @@ struct OnboardingView: View {
                         .toggleStyle(.checkbox)
 
                     Button("Finish Setup") {
-                        store.config.launchAtLogin = launchAtLogin
-                        store.saveConfig()
+                        orchestrator.launcher.launchAtLogin = launchAtLogin
+                        orchestrator.saveConfig()
+                        orchestrator.saveLauncher()
                     }
                     .keyboardShortcut(.defaultAction)
                 }
@@ -430,8 +430,8 @@ struct OnboardingView: View {
                     .foregroundStyle(.secondary)
 
                 PubkeyListEditor(pubkeys: Binding(
-                    get: { store.config.whitelistedPubkeys ?? [] },
-                    set: { store.config.whitelistedPubkeys = $0.isEmpty ? nil : $0 }
+                    get: { orchestrator.config.whitelistedPubkeys ?? [] },
+                    set: { orchestrator.config.whitelistedPubkeys = $0.isEmpty ? nil : $0 }
                 ))
             }
         }
@@ -549,11 +549,11 @@ struct OnboardingView: View {
     private func saveRelayConfig() {
         switch relayMode {
         case .remote:
-            store.config.relays = [remoteRelayURL]
-            store.config.localRelay = LocalRelayConfig(enabled: false)
+            orchestrator.config.relays = [remoteRelayURL]
+            orchestrator.launcher.localRelay = LocalRelayConfig(enabled: false)
         case .local:
-            store.config.relays = ["ws://localhost:7777"]
-            store.config.localRelay = LocalRelayConfig(
+            orchestrator.config.relays = ["ws://localhost:7777"]
+            orchestrator.launcher.localRelay = LocalRelayConfig(
                 enabled: true,
                 autoStart: true,
                 port: 7777,
@@ -570,9 +570,9 @@ struct OnboardingView: View {
 
         // Write credentials
         for credential in detected.credentials {
-            store.providers.providers[credential.provider] = ProviderEntry(apiKey: credential.apiKey)
+            orchestrator.providers.providers[credential.provider] = ProviderEntry(apiKey: credential.apiKey)
         }
-        store.saveProviders()
+        orchestrator.saveProviders()
 
         // Seed LLM configs from newly added providers (reuses existing logic)
         seedDefaultLLMConfigs()
@@ -650,12 +650,12 @@ struct OnboardingView: View {
 
     private var mobileSetupStepView: some View {
         VStack(spacing: 20) {
-            let configuredRelay = store.config.relays?.first
+            let configuredRelay = orchestrator.config.relays?.first
             let relayForQRCode = mobileQRCodeRelay
             let setupURL = QRCodeGenerator.mobileSetupURL(
                 nsec: generatedNsec,
                 relay: relayForQRCode,
-                backendPubkey: store.config.tenexPublicKey
+                backendPubkey: orchestrator.launcher.tenexPublicKey
             )
 
             if generatedNsec.isEmpty {
@@ -684,7 +684,7 @@ struct OnboardingView: View {
                             .font(.system(.caption, design: .monospaced))
                     }
                     .font(.caption)
-                    if let pubkey = store.config.tenexPublicKey {
+                    if let pubkey = orchestrator.launcher.tenexPublicKey {
                         HStack(spacing: 4) {
                             Text("Backend:")
                                 .foregroundStyle(.secondary)
@@ -718,8 +718,8 @@ struct OnboardingView: View {
                         .font(.system(size: 48))
                         .foregroundStyle(.secondary)
 
-                    if store.config.localRelay?.enabled == true {
-                        if store.config.localRelay?.ngrokEnabled == true {
+                    if orchestrator.launcher.localRelay?.enabled == true {
+                        if orchestrator.launcher.localRelay?.ngrokEnabled == true {
                             Text("Local relay is configured with ngrok, but the public relay URL is created after setup. Finish setup, then open Mobile to scan a QR code with the ngrok URL.")
                         } else {
                             Text("Local relay is using localhost, which your iPhone cannot reach. Finish setup, then open Mobile to enable ngrok and generate a QR code.")
@@ -741,7 +741,7 @@ struct OnboardingView: View {
     }
 
     private var mobileQRCodeRelay: String? {
-        guard let relay = store.config.relays?.first else { return nil }
+        guard let relay = orchestrator.config.relays?.first else { return nil }
         return QRCodeGenerator.isLoopbackRelay(relay) ? nil : relay
     }
 
@@ -749,11 +749,11 @@ struct OnboardingView: View {
 
     private func generateBackendKeyAndApprove() {
         // Generate a keypair for the backend if one doesn't exist
-        if store.config.tenexPrivateKey == nil {
+        if orchestrator.config.tenexPrivateKey == nil {
             guard let keypair = try? coreManager.core.generateKeypair() else { return }
             guard let hexPrivateKey = Bech32.nsecToHex(keypair.nsec) else { return }
-            store.config.tenexPrivateKey = hexPrivateKey
-            store.config.tenexPublicKey = keypair.pubkeyHex
+            orchestrator.config.tenexPrivateKey = hexPrivateKey
+            orchestrator.launcher.tenexPublicKey = keypair.pubkeyHex
 
             // Approve the backend in the client
             try? coreManager.core.approveBackend(pubkey: keypair.pubkeyHex)
@@ -855,10 +855,10 @@ struct OnboardingView: View {
                 }
 
                 // Add hex pubkey to whitelist
-                var pubkeys = store.config.whitelistedPubkeys ?? []
+                var pubkeys = orchestrator.config.whitelistedPubkeys ?? []
                 if !pubkeys.contains(identityHexPubkey) {
                     pubkeys.append(identityHexPubkey)
-                    store.config.whitelistedPubkeys = pubkeys
+                    orchestrator.config.whitelistedPubkeys = pubkeys
                 }
 
                 // Publish profile if name was provided (create flow)
@@ -877,9 +877,9 @@ struct OnboardingView: View {
     // MARK: - Default LLM Seeding
 
     private func seedDefaultLLMConfigs() {
-        guard store.llms.configurations.isEmpty else { return }
+        guard orchestrator.llms.configurations.isEmpty else { return }
 
-        let connected = Set(store.providers.providers.keys)
+        let connected = Set(orchestrator.providers.providers.keys)
 
         // Prefer claude-code (local CLI), fall back to anthropic API key
         let anthropicProvider: String? = if connected.contains("claude-code") {
@@ -891,13 +891,13 @@ struct OnboardingView: View {
         }
 
         if let provider = anthropicProvider {
-            store.llms.configurations["Sonnet"] = .standard(
+            orchestrator.llms.configurations["Sonnet"] = .standard(
                 StandardLLM(provider: provider, model: "claude-sonnet-4-6")
             )
-            store.llms.configurations["Opus"] = .standard(
+            orchestrator.llms.configurations["Opus"] = .standard(
                 StandardLLM(provider: provider, model: "claude-opus-4-6")
             )
-            store.llms.configurations["Auto"] = .meta(MetaLLM(
+            orchestrator.llms.configurations["Auto"] = .meta(MetaLLM(
                 provider: "meta",
                 variants: [
                     "fast": MetaVariant(
@@ -918,20 +918,20 @@ struct OnboardingView: View {
                 ],
                 defaultVariant: "balanced"
             ))
-            store.llms.default = "Auto"
+            orchestrator.llms.default = "Auto"
         }
 
         if connected.contains("openai") {
-            store.llms.configurations["GPT-4o"] = .standard(
+            orchestrator.llms.configurations["GPT-4o"] = .standard(
                 StandardLLM(provider: "openai", model: "gpt-4o")
             )
             if anthropicProvider == nil {
-                store.llms.default = "GPT-4o"
+                orchestrator.llms.default = "GPT-4o"
             }
         }
 
-        if !store.llms.configurations.isEmpty {
-            store.saveLLMs()
+        if !orchestrator.llms.configurations.isEmpty {
+            orchestrator.saveLLMs()
         }
     }
 }

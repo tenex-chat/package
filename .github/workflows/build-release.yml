@@ -41,10 +41,10 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: deps/khatru-relay/go.sum
+          cache-dependency-path: relay/go.sum
 
       - name: Build Khatru relay (both architectures)
-        working-directory: deps/khatru-relay
+        working-directory: relay
         run: |
           # Build for ARM64 (Apple Silicon)
           GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build \
@@ -125,8 +125,8 @@ jobs:
           RESOURCES_PATH="$APP_PATH/Contents/Resources"
 
           # Copy both relay binaries to Resources
-          cp deps/khatru-relay/dist/tenex-relay-arm64 "$RESOURCES_PATH/"
-          cp deps/khatru-relay/dist/tenex-relay-x86_64 "$RESOURCES_PATH/"
+          cp relay/dist/tenex-relay-arm64 "$RESOURCES_PATH/"
+          cp relay/dist/tenex-relay-x86_64 "$RESOURCES_PATH/"
 
           # Make them executable
           chmod +x "$RESOURCES_PATH/tenex-relay-arm64"

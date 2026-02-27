@@ -62,7 +62,7 @@ fi
 # 2. Build khatru-relay
 # ---------------------------------------------------------------------------
 if [[ $OPT_RELAY -eq 1 ]]; then
-    RELAY_DIR="$ROOT_DIR/deps/khatru-relay"
+    RELAY_DIR="$ROOT_DIR/relay"
     echo "==> Building khatru-relay..."
 
     if ! command -v go &>/dev/null; then

@@ -11,6 +11,7 @@ xcuserdata/
 # Build
 build/
 DerivedData/
+target/
 
 # macOS
 .DS_Store

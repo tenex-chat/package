@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct DaemonView: View {
-    @ObservedObject var daemon: DaemonManager
+    @ObservedObject var orchestrator: OrchestratorManager
 
     var body: some View {
         VStack(spacing: 0) {
@@ -11,26 +11,26 @@ struct DaemonView: View {
                     .fill(statusColor)
                     .frame(width: 10, height: 10)
 
-                Text(daemon.status.label)
+                Text(statusLabel)
                     .font(.headline)
 
                 Spacer()
 
-                switch daemon.status {
+                switch orchestrator.daemonStatus {
                 case .stopped, .failed:
-                    Button("Start") { daemon.start() }
+                    Button("Start") { orchestrator.startDaemon() }
                         .buttonStyle(.borderedProminent)
                 case .starting:
                     ProgressView()
                         .controlSize(.small)
                 case .running:
-                    Button("Stop") { daemon.stop() }
+                    Button("Stop") { orchestrator.stopDaemon() }
                         .buttonStyle(.bordered)
                 }
             }
             .padding()
 
-            if let error = daemon.lastError {
+            if let error = orchestrator.daemonError {
                 HStack {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.yellow)
@@ -46,17 +46,26 @@ struct DaemonView: View {
             Divider()
 
             // Log output
-            LogView(logs: daemon.recentLogs)
+            LogView(logs: orchestrator.daemonLogs)
         }
         .navigationTitle("Daemon")
     }
 
     private var statusColor: Color {
-        switch daemon.status {
+        switch orchestrator.daemonStatus {
         case .running: .green
         case .starting: .yellow
         case .stopped: .gray
         case .failed: .red
+        }
+    }
+
+    private var statusLabel: String {
+        switch orchestrator.daemonStatus {
+        case .stopped: "Stopped"
+        case .starting: "Starting..."
+        case .running: "Running"
+        case .failed: "Failed"
         }
     }
 }

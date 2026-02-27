@@ -33,14 +33,24 @@ private let apiKeyEnvVars: [String: String] = [
     "openrouter": "OPENROUTER_API_KEY",
 ]
 
+private func isOAuthSetupToken(_ key: String) -> Bool {
+    key.hasPrefix("sk-ant-oat")
+}
+
+private func requiresApiKey(_ provider: String) -> Bool {
+    ["openrouter", "openai", "anthropic", "ollama"].contains(provider)
+}
+
 struct ProvidersView: View {
-    @ObservedObject var store: ConfigStore
+    @ObservedObject var orchestrator: OrchestratorManager
 
     @State private var providerAvailability: [String: Bool] = [:]
     @State private var showCredentialSheet = false
+    @State private var showManageSheet = false
     @State private var selectedProvider = ""
     @State private var credentialValue = ""
     @State private var credentialError: String?
+    @State private var isAddingKey = false // true when adding a key to existing provider
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -48,21 +58,21 @@ struct ProvidersView: View {
                 title: "Providers",
                 rows: providerListOrder.map { provider in
                     let connected = isConnected(provider)
+                    let entry = orchestrator.providers.providers[provider]
+                    let hasMultipleKeys = (entry?.apiKeys.count ?? 0) > 1
+                    let isApiKeyProvider = requiresApiKey(provider) && connected
+
                     return SettingsProviderRowData(
                         id: provider,
                         name: settingsProviderDisplayNames[provider] ?? provider,
                         subtitle: subtitle(for: provider),
                         isConnected: connected,
-                        buttonLabel: connected ? "Disconnect" : "Connect",
+                        showManage: isApiKeyProvider && connected,
+                        showAdd: isApiKeyProvider && connected,
+                        showDisconnect: connected && !isApiKeyProvider,
+                        showConnect: !connected,
                         buttonDisabled: buttonDisabled(for: provider)
                     )
-                },
-                onButtonTap: { provider in
-                    if isConnected(provider) {
-                        disconnect(provider)
-                    } else {
-                        connect(provider)
-                    }
                 }
             )
             Spacer(minLength: 0)
@@ -76,17 +86,31 @@ struct ProvidersView: View {
         .sheet(isPresented: $showCredentialSheet) {
             providerCredentialSheet
         }
+        .sheet(isPresented: $showManageSheet) {
+            providerManageSheet
+        }
     }
+
+    // MARK: - Credential Sheet
 
     private var providerCredentialSheet: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Connect \(settingsProviderDisplayNames[selectedProvider] ?? selectedProvider)")
+            Text(isAddingKey
+                 ? "Add Key to \(settingsProviderDisplayNames[selectedProvider] ?? selectedProvider)"
+                 : "Connect \(settingsProviderDisplayNames[selectedProvider] ?? selectedProvider)")
                 .font(.headline)
 
             if selectedProvider == "ollama" {
                 TextField("Ollama URL", text: $credentialValue)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
+            } else if selectedProvider == "anthropic" {
+                SecureField("API key or setup-token", text: $credentialValue)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                Text("Paste an API key (sk-ant-api...) or a setup-token from `claude setup-token` (sk-ant-oat...) to use your Max subscription.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } else {
                 SecureField("API key", text: $credentialValue)
                     .textFieldStyle(.roundedBorder)
@@ -104,14 +128,17 @@ struct ProvidersView: View {
                     showCredentialSheet = false
                 }
                 Spacer()
-                Button("Connect") {
+                Button(isAddingKey ? "Add" : "Connect") {
                     let trimmed = credentialValue.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty else {
                         credentialError = selectedProvider == "ollama" ? "URL is required." : "API key is required."
                         return
                     }
-                    store.providers.providers[selectedProvider] = ProviderEntry(apiKey: trimmed)
-                    store.saveProviders()
+                    if isAddingKey {
+                        orchestrator.addProviderKey(providerId: selectedProvider, apiKey: trimmed)
+                    } else {
+                        orchestrator.connectProvider(id: selectedProvider, apiKey: trimmed)
+                    }
                     if selectedProvider == "openrouter" {
                         syncOpenRouterKeyToMacApp(trimmed)
                     }
@@ -125,6 +152,129 @@ struct ProvidersView: View {
         .padding(16)
         .frame(width: 420)
     }
+
+    // MARK: - Manage Sheet
+
+    private var providerManageSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Manage \(settingsProviderDisplayNames[selectedProvider] ?? selectedProvider) Keys")
+                .font(.headline)
+
+            let keys = orchestrator.providers.providers[selectedProvider]?.apiKeys ?? []
+
+            if keys.isEmpty {
+                Text("No keys configured.")
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(keys.enumerated()), id: \.offset) { index, key in
+                        HStack {
+                            if index == 0 {
+                                Text("Primary")
+                                    .font(.caption2)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(.blue.opacity(0.15)))
+                                    .foregroundStyle(.blue)
+                            }
+                            Text(maskedKey(key))
+                                .font(.system(.caption, design: .monospaced))
+                            Spacer()
+
+                            if keys.count > 1 {
+                                if index > 0 {
+                                    Button {
+                                        orchestrator.reorderProviderKey(
+                                            providerId: selectedProvider,
+                                            fromIndex: UInt32(index),
+                                            toIndex: UInt32(index - 1)
+                                        )
+                                    } label: {
+                                        Image(systemName: "arrow.up")
+                                            .font(.caption)
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+
+                                if index < keys.count - 1 {
+                                    Button {
+                                        orchestrator.reorderProviderKey(
+                                            providerId: selectedProvider,
+                                            fromIndex: UInt32(index),
+                                            toIndex: UInt32(index + 1)
+                                        )
+                                    } label: {
+                                        Image(systemName: "arrow.down")
+                                            .font(.caption)
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
+
+                            Button {
+                                orchestrator.removeProviderKey(
+                                    providerId: selectedProvider,
+                                    index: UInt32(index)
+                                )
+                                // If no keys left, close the sheet
+                                if (orchestrator.providers.providers[selectedProvider]?.apiKeys ?? []).isEmpty {
+                                    showManageSheet = false
+                                }
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        .padding(8)
+
+                        if index < keys.count - 1 {
+                            Divider()
+                        }
+                    }
+                }
+                .background(Color(nsColor: .windowBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(.quaternary, lineWidth: 1)
+                )
+            }
+
+            HStack {
+                Button("Disconnect") {
+                    disconnect(selectedProvider)
+                    showManageSheet = false
+                }
+                .foregroundStyle(.red)
+
+                Spacer()
+
+                Button("Add Key") {
+                    showManageSheet = false
+                    isAddingKey = true
+                    credentialValue = ""
+                    credentialError = nil
+                    showCredentialSheet = true
+                }
+
+                Button("Done") {
+                    showManageSheet = false
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .frame(width: 420)
+    }
+
+    private func maskedKey(_ key: String) -> String {
+        if key.count <= 8 { return key }
+        return "\(key.prefix(6))...\(key.suffix(4))"
+    }
+
+    // MARK: - Helpers
 
     private func syncOpenRouterKeyToMacApp(_ key: String) {
         let url = FileManager.default
@@ -148,6 +298,7 @@ struct ProvidersView: View {
     private func connect(_ provider: String) {
         credentialError = nil
         selectedProvider = provider
+        isAddingKey = false
 
         if provider == "ollama" {
             credentialValue = "http://localhost:11434"
@@ -161,20 +312,18 @@ struct ProvidersView: View {
             return
         }
 
-        store.providers.providers[provider] = ProviderEntry(apiKey: "none")
-        store.saveProviders()
+        orchestrator.connectProvider(id: provider, apiKey: "none")
     }
 
     private func disconnect(_ provider: String) {
-        store.providers.providers.removeValue(forKey: provider)
-        store.saveProviders()
+        orchestrator.disconnectProvider(id: provider)
         if provider == "openrouter" {
             removeOpenRouterKeyFromMacApp()
         }
     }
 
     private func isConnected(_ provider: String) -> Bool {
-        store.providers.providers[provider] != nil
+        orchestrator.providers.providers[provider] != nil
     }
 
     private func buttonDisabled(for provider: String) -> Bool {
@@ -186,43 +335,41 @@ struct ProvidersView: View {
     }
 
     private func subtitle(for provider: String) -> String {
-        if isConnected(provider) {
+        guard let entry = orchestrator.providers.providers[provider] else {
             switch provider {
-            case "openrouter", "openai", "anthropic":
-                return "Connected with API key"
-            case "ollama":
-                return "Connected local endpoint (\(store.providers.providers[provider]?.apiKey ?? "http://localhost:11434"))"
-            case "claude-code":
-                return "Connected from local `claude` command"
-            case "codex-app-server":
-                return "Connected from local `codex` command"
-            case "gemini-cli":
-                return "Connected from local `gemini` command"
-            default:
-                return "Connected"
+            case "openrouter": return "Use API key to access hosted models"
+            case "openai": return "Use OpenAI API key"
+            case "anthropic": return "API key or setup-token from `claude setup-token`"
+            case "ollama": return "Connect to your local Ollama endpoint"
+            case "claude-code": return "Requires local `claude` command"
+            case "codex-app-server": return "Requires local `codex` command"
+            case "gemini-cli": return "Requires local `gemini` command"
+            default: return "Not configured"
             }
         }
 
+        let keySuffix = entry.apiKeys.count > 1 ? " (\(entry.apiKeys.count) keys)" : ""
+
         switch provider {
-        case "openrouter":
-            return "Use API key to access hosted models"
-        case "openai":
-            return "Use OpenAI API key"
         case "anthropic":
-            return "Use Anthropic API key"
+            if let key = entry.primaryKey, isOAuthSetupToken(key) {
+                return "Connected with setup-token (Max subscription)\(keySuffix)"
+            }
+            return "Connected with API key\(keySuffix)"
+        case "openrouter", "openai":
+            return "Connected with API key\(keySuffix)"
         case "ollama":
-            return "Connect to your local Ollama endpoint"
+            return "Connected local endpoint (\(entry.primaryKey ?? "http://localhost:11434"))"
         case "claude-code":
-            return "Requires local `claude` command"
+            return "Connected from local `claude` command"
         case "codex-app-server":
-            return "Requires local `codex` command"
+            return "Connected from local `codex` command"
         case "gemini-cli":
-            return "Requires local `gemini` command"
+            return "Connected from local `gemini` command"
         default:
-            return "Not configured"
+            return "Connected"
         }
     }
-
 
     private func detectLocalAvailability() async {
         var availability: [String: Bool] = [:]
@@ -241,26 +388,33 @@ struct ProvidersView: View {
         // Auto-connect local command providers that are available
         for (provider, _) in localCommandProviders {
             if providerAvailability[provider] == true && !isConnected(provider) {
-                store.providers.providers[provider] = ProviderEntry(apiKey: "none")
+                orchestrator.providers.providers[provider] = ProviderEntry(apiKey: "none")
             }
         }
 
         // Auto-connect ollama if available
         if providerAvailability["ollama"] == true && !isConnected("ollama") {
-            store.providers.providers["ollama"] = ProviderEntry(apiKey: "http://localhost:11434")
+            orchestrator.providers.providers["ollama"] = ProviderEntry(apiKey: "http://localhost:11434")
         }
 
         // Auto-connect API key providers from env vars
         for (provider, envVar) in apiKeyEnvVars {
             if !isConnected(provider), let apiKey = ProcessInfo.processInfo.environment[envVar], !apiKey.isEmpty {
-                store.providers.providers[provider] = ProviderEntry(apiKey: apiKey)
+                orchestrator.providers.providers[provider] = ProviderEntry(apiKey: apiKey)
                 if provider == "openrouter" {
                     syncOpenRouterKeyToMacApp(apiKey)
                 }
             }
         }
 
-        store.saveProviders()
+        // Auto-connect Anthropic from ANTHROPIC_AUTH_TOKEN (OAuth setup-token)
+        if !isConnected("anthropic"),
+           let authToken = ProcessInfo.processInfo.environment["ANTHROPIC_AUTH_TOKEN"],
+           !authToken.isEmpty {
+            orchestrator.providers.providers["anthropic"] = ProviderEntry(apiKey: authToken)
+        }
+
+        orchestrator.saveProviders()
     }
 
     private static func commandExists(_ command: String) -> Bool {
@@ -292,10 +446,11 @@ struct ProvidersView: View {
         }
     }
 
+    // MARK: - Provider Card
+
     private func providerCard(
         title: String,
-        rows: [SettingsProviderRowData],
-        onButtonTap: ((String) -> Void)? = nil
+        rows: [SettingsProviderRowData]
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
@@ -320,9 +475,32 @@ struct ProvidersView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if let label = row.buttonLabel {
-                            Button(label) {
-                                onButtonTap?(row.id)
+
+                        if row.showManage {
+                            Button("Manage") {
+                                selectedProvider = row.id
+                                showManageSheet = true
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button {
+                                selectedProvider = row.id
+                                isAddingKey = true
+                                credentialValue = ""
+                                credentialError = nil
+                                showCredentialSheet = true
+                            } label: {
+                                Image(systemName: "plus")
+                            }
+                            .buttonStyle(.bordered)
+                        } else if row.showDisconnect {
+                            Button("Disconnect") {
+                                disconnect(row.id)
+                            }
+                            .buttonStyle(.bordered)
+                        } else if row.showConnect {
+                            Button("Connect") {
+                                connect(row.id)
                             }
                             .buttonStyle(.bordered)
                             .disabled(row.buttonDisabled)
@@ -349,6 +527,9 @@ private struct SettingsProviderRowData {
     let name: String
     let subtitle: String
     let isConnected: Bool
-    let buttonLabel: String?
+    let showManage: Bool
+    let showAdd: Bool
+    let showDisconnect: Bool
+    let showConnect: Bool
     let buttonDisabled: Bool
 }

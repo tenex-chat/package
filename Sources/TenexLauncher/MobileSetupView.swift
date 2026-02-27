@@ -1,27 +1,26 @@
 import SwiftUI
 
 struct MobileSetupView: View {
-    @ObservedObject var store: ConfigStore
-    @ObservedObject var ngrokManager: NgrokManager
+    @ObservedObject var orchestrator: OrchestratorManager
     @State private var nsec: String?
     @State private var loadingNsec = true
 
     private var configuredRelay: String? {
-        store.config.relays?.first
+        orchestrator.config.relays?.first
     }
 
     private var localRelayConfigured: Bool {
-        store.config.localRelay?.enabled == true
+        orchestrator.launcher.localRelay?.enabled == true
             && (configuredRelay == nil || QRCodeGenerator.isLoopbackRelay(configuredRelay))
     }
 
     private var ngrokEnabled: Bool {
-        store.config.localRelay?.ngrokEnabled == true
+        orchestrator.launcher.localRelay?.ngrokEnabled == true
     }
 
     private var relayForQRCode: String? {
         if localRelayConfigured {
-            return ngrokManager.wssURL
+            return orchestrator.ngrokWssUrl
         }
         return configuredRelay
     }
@@ -60,7 +59,7 @@ struct MobileSetupView: View {
             let setupURL = QRCodeGenerator.mobileSetupURL(
                 nsec: nsec,
                 relay: relay,
-                backendPubkey: store.config.tenexPublicKey
+                backendPubkey: orchestrator.launcher.tenexPublicKey
             )
 
             if let qrImage = QRCodeGenerator.generate(from: setupURL) {
@@ -80,7 +79,7 @@ struct MobileSetupView: View {
                 }
                 .font(.caption)
 
-                if let pubkey = store.config.tenexPublicKey {
+                if let pubkey = orchestrator.launcher.tenexPublicKey {
                     HStack(spacing: 4) {
                         Text("Backend:")
                             .foregroundStyle(.secondary)
@@ -136,7 +135,7 @@ struct MobileSetupView: View {
                     .multilineTextAlignment(.center)
             }
 
-            if let lastError = ngrokManager.lastError, !lastError.isEmpty {
+            if let lastError = orchestrator.ngrokError, !lastError.isEmpty {
                 Text(lastError)
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -144,16 +143,16 @@ struct MobileSetupView: View {
             }
 
             if ngrokEnabled {
-                switch ngrokManager.status {
+                switch orchestrator.ngrokStatus {
                 case .stopped, .failed:
                     Button("Start ngrok tunnel") {
-                        startNgrokTunnel()
+                        orchestrator.startNgrok()
                     }
                 case .starting:
                     ProgressView("Starting ngrok...")
                 case .running:
                     Button("Stop ngrok tunnel") {
-                        ngrokManager.stop()
+                        orchestrator.stopNgrok()
                     }
                 }
             } else {
@@ -177,20 +176,12 @@ struct MobileSetupView: View {
     }
 
     private func enableAndStartNgrok() {
-        if store.config.localRelay == nil {
-            store.config.localRelay = LocalRelayConfig()
+        if orchestrator.launcher.localRelay == nil {
+            orchestrator.launcher.localRelay = LocalRelayConfig()
         }
-        store.config.localRelay?.enabled = true
-        store.config.localRelay?.ngrokEnabled = true
-        store.saveConfig()
-        startNgrokTunnel()
-    }
-
-    private func startNgrokTunnel() {
-        let port = store.config.localRelay?.port ?? 7777
-        Task {
-            ngrokManager.configure(port: port)
-            await ngrokManager.start()
-        }
+        orchestrator.launcher.localRelay?.enabled = true
+        orchestrator.launcher.localRelay?.ngrokEnabled = true
+        orchestrator.saveLauncher()
+        orchestrator.startNgrok()
     }
 }

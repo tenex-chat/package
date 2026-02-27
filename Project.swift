@@ -34,8 +34,6 @@ let project = Project(
                         "deps/tui/ios-app/Sources/TenexMVP/AppSession/AppSessionStore.swift",
                     ]
                 ),
-
-
             ],
             resources: [
                 "deps/tui/ios-app/Sources/TenexMVP/Resources/**",
@@ -52,21 +50,25 @@ let project = Project(
                     "HEADER_SEARCH_PATHS": [
                         "$(inherited)",
                         "$(SRCROOT)/deps/tui/ios-app/Sources/TenexMVP/TenexCoreFFI",
+                        "$(SRCROOT)/Sources/OrchestratorFFI",
                     ],
-                    // Rust static library for macOS
+                    // Rust static libraries for macOS
                     "LIBRARY_SEARCH_PATHS": [
                         "$(inherited)",
                         "$(SRCROOT)/deps/tui/target/aarch64-apple-darwin/release",
+                        "$(SRCROOT)/target/aarch64-apple-darwin/release",
                     ],
                     "OTHER_LDFLAGS": [
                         "$(inherited)",
                         "$(SRCROOT)/deps/tui/target/aarch64-apple-darwin/release/libtenex_core.a",
+                        "$(SRCROOT)/target/aarch64-apple-darwin/release/libtenex_orchestrator.a",
                         "-framework", "SystemConfiguration",
                     ],
-                    // Swift import paths for the modulemap
+                    // Swift import paths for the modulemaps
                     "SWIFT_INCLUDE_PATHS": [
                         "$(inherited)",
                         "$(SRCROOT)/deps/tui/ios-app/Sources/TenexMVP/TenexCoreFFI",
+                        "$(SRCROOT)/Sources/OrchestratorFFI",
                         "$(SRCROOT)/Sources/UIKitShim", // UIKit shim modulemap for macOS
                     ],
                     "OTHER_SWIFT_FLAGS": [

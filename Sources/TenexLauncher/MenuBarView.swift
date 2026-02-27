@@ -2,36 +2,30 @@ import SwiftUI
 import AppKit
 
 struct MenuBarView: View {
-    @ObservedObject var daemon: DaemonManager
-    @ObservedObject var configStore: ConfigStore
-    @ObservedObject var relayManager: RelayManager
-    @ObservedObject var ngrokManager: NgrokManager
+    @ObservedObject var orchestrator: OrchestratorManager
     @ObservedObject var negentropySync: NegentropySync
+    @ObservedObject var pendingEventsQueue: PendingEventsQueue
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Section {
             HStack {
                 Circle()
-                    .fill(daemonStatusColor)
+                    .fill(statusColor(orchestrator.daemonStatus))
                     .frame(width: 8, height: 8)
-                Text("Daemon: \(daemon.status.label)")
+                Text("Daemon: \(statusLabel(orchestrator.daemonStatus))")
             }
 
             // Local relay status (only show if enabled)
-            if relayManager.status != .stopped || relayManager.lastError != nil {
+            if orchestrator.relayStatus != .stopped || orchestrator.relayError != nil {
                 HStack {
                     Circle()
-                        .fill(relayStatusColor)
+                        .fill(statusColor(orchestrator.relayStatus))
                         .frame(width: 8, height: 8)
-                    Text("Local Relay: \(relayManager.status.label)")
+                    Text("Local Relay: \(statusLabel(orchestrator.relayStatus))")
                 }
 
-                if relayManager.status == .running {
-                    Text("  Uptime: \(formatUptime(relayManager.uptime))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
+                if orchestrator.relayStatus == .running {
                     if negentropySync.status.isSuccess, let lastSync = negentropySync.lastSuccessfulSync {
                         Text("  Last sync: \(lastSync, style: .relative)")
                             .font(.caption)
@@ -41,17 +35,17 @@ struct MenuBarView: View {
             }
 
             // Ngrok tunnel status
-            if ngrokManager.status != .stopped {
+            if orchestrator.ngrokStatus != .stopped {
                 Divider()
 
                 HStack {
                     Circle()
-                        .fill(ngrokStatusColor)
+                        .fill(statusColor(orchestrator.ngrokStatus))
                         .frame(width: 8, height: 8)
-                    Text("Tunnel: \(ngrokManager.status.label)")
+                    Text("Tunnel: \(statusLabel(orchestrator.ngrokStatus))")
                 }
 
-                if let tunnelURL = ngrokManager.tunnelURL {
+                if let tunnelURL = orchestrator.ngrokTunnelUrl {
                     Button {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(tunnelURL, forType: .string)
@@ -73,13 +67,13 @@ struct MenuBarView: View {
         }
 
         Section {
-            switch daemon.status {
+            switch orchestrator.daemonStatus {
             case .stopped, .failed:
-                Button("Start Daemon") { daemon.start() }
+                Button("Start Daemon") { orchestrator.startDaemon() }
             case .starting:
                 Button("Starting...") {}.disabled(true)
             case .running:
-                Button("Stop Daemon") { daemon.stop() }
+                Button("Stop Daemon") { orchestrator.stopDaemon() }
             }
         }
 
@@ -100,24 +94,25 @@ struct MenuBarView: View {
         Divider()
 
         Button("Quit TENEX") {
-            ngrokManager.stop()
-            relayManager.stop()
-            daemon.stop()
+            orchestrator.shutdown()
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q")
         .task {
-            if configStore.needsOnboarding {
+            if orchestrator.needsOnboarding {
                 openWindow(id: "settings")
                 NSApplication.shared.activate(ignoringOtherApps: true)
             } else {
-                daemon.start()
+                orchestrator.startAllServices(
+                    negentropySync: negentropySync,
+                    pendingEventsQueue: pendingEventsQueue
+                )
             }
         }
     }
 
-    private var daemonStatusColor: Color {
-        switch daemon.status {
+    private func statusColor(_ status: FfiProcessStatus) -> Color {
+        switch status {
         case .running: .green
         case .starting: .yellow
         case .stopped: .gray
@@ -125,40 +120,17 @@ struct MenuBarView: View {
         }
     }
 
-    private var relayStatusColor: Color {
-        switch relayManager.status {
-        case .running: .green
-        case .starting: .yellow
-        case .stopped: .gray
-        case .failed: .red
-        }
-    }
-
-    private var ngrokStatusColor: Color {
-        switch ngrokManager.status {
-        case .running: .green
-        case .starting: .yellow
-        case .stopped: .gray
-        case .failed: .red
-        }
-    }
-
-    private func formatUptime(_ seconds: TimeInterval) -> String {
-        let hours = Int(seconds) / 3600
-        let minutes = (Int(seconds) % 3600) / 60
-        let secs = Int(seconds) % 60
-
-        if hours > 0 {
-            return String(format: "%dh %dm", hours, minutes)
-        } else if minutes > 0 {
-            return String(format: "%dm %ds", minutes, secs)
-        } else {
-            return String(format: "%ds", secs)
+    private func statusLabel(_ status: FfiProcessStatus) -> String {
+        switch status {
+        case .stopped: "Stopped"
+        case .starting: "Starting..."
+        case .running: "Running"
+        case .failed: "Failed"
         }
     }
 
     private func showQRCodeWindow() {
-        guard let wssURL = ngrokManager.wssURL else { return }
+        guard let wssURL = orchestrator.ngrokWssUrl else { return }
 
         // Load nsec on background thread
         DispatchQueue.global(qos: .userInitiated).async {
@@ -175,7 +147,7 @@ struct MenuBarView: View {
                 let payload = QRCodeGenerator.mobileSetupURL(
                     nsec: nsec,
                     relay: wssURL,
-                    backendPubkey: configStore.config.tenexPublicKey
+                    backendPubkey: orchestrator.launcher.tenexPublicKey
                 )
 
                 let panel = NSPanel(

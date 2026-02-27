@@ -49,9 +49,6 @@ pub struct LauncherConfig {
     pub local_relay: Option<LocalRelayConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tenex_public_key: Option<String>,
-    /// Nostr event IDs of agents selected during onboarding, to be hired when daemon starts.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pending_agent_ids: Option<Vec<String>>,
     /// Nostr event IDs of nudges selected during onboarding, to be activated when daemon starts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_nudge_ids: Option<Vec<String>>,
@@ -75,6 +72,8 @@ pub struct LocalRelayConfig {
     pub ngrok_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ngrok_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nip42_auth: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -383,9 +382,9 @@ mod tests {
                 sync_relays: Some(vec!["wss://tenex.chat".into()]),
                 ngrok_enabled: Some(false),
                 ngrok_url: None,
+                nip42_auth: None,
             }),
             tenex_public_key: Some("abc123".into()),
-            pending_agent_ids: Some(vec!["aabb00".into()]),
             pending_nudge_ids: None,
             pending_skill_ids: None,
         };
@@ -395,9 +394,8 @@ mod tests {
         assert_eq!(parsed.launch_at_login, Some(true));
         assert_eq!(parsed.local_relay.as_ref().unwrap().port, Some(7777));
         assert_eq!(parsed.tenex_public_key.as_deref(), Some("abc123"));
-        assert_eq!(parsed.pending_agent_ids.as_ref().unwrap(), &["aabb00"]);
         assert!(parsed.pending_nudge_ids.is_none());
-        assert!(json.contains("pendingAgentIds"));
+        assert!(!json.contains("pendingAgentIds"));
         assert!(json.contains("localRelay"));
         assert!(json.contains("autoStart"));
         assert!(json.contains("launchAtLogin"));

@@ -12,6 +12,7 @@ pub enum FfiOnboardingStep {
     FirstProject,
     HireAgents,
     NudgesSkills,
+    MobilePairing,
     Done,
 }
 
@@ -26,6 +27,7 @@ impl From<onboarding::OnboardingStep> for FfiOnboardingStep {
             onboarding::OnboardingStep::FirstProject => FfiOnboardingStep::FirstProject,
             onboarding::OnboardingStep::HireAgents => FfiOnboardingStep::HireAgents,
             onboarding::OnboardingStep::NudgesSkills => FfiOnboardingStep::NudgesSkills,
+            onboarding::OnboardingStep::MobilePairing => FfiOnboardingStep::MobilePairing,
             onboarding::OnboardingStep::Done => FfiOnboardingStep::Done,
         }
     }

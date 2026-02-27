@@ -17,3 +17,4 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 dirs.workspace = true
 nostr-sdk.workspace = true
+qrcode = "0.14"

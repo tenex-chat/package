@@ -103,12 +103,18 @@ impl RelayManager {
         None
     }
 
-    fn write_relay_config(&self, port: u16, sync_relays: &[String]) -> Result<PathBuf> {
+    fn write_relay_config(&self, port: u16, sync_relays: &[String], nip42_auth: bool) -> Result<PathBuf> {
         let base_dir = self.config_store.base_dir();
         let relay_dir = base_dir.join("relay");
         let data_dir = relay_dir.join("data");
         std::fs::create_dir_all(&data_dir)
             .with_context(|| format!("Failed to create relay data dir {:?}", data_dir))?;
+
+        let mut supported_nips = vec![1, 2, 4, 9, 11, 12, 16, 20, 22, 33, 40, 77];
+        if nip42_auth {
+            supported_nips.push(42);
+        }
+        supported_nips.sort();
 
         let config_path = base_dir.join("relay.json");
         let config = serde_json::json!({
@@ -119,7 +125,7 @@ impl RelayManager {
                 "description": "Local Nostr relay for TENEX",
                 "pubkey": "",
                 "contact": "",
-                "supported_nips": [1, 2, 4, 9, 11, 12, 16, 20, 22, 33, 40, 42, 77],
+                "supported_nips": supported_nips,
                 "software": "tenex-khatru-relay",
                 "version": "0.1.0"
             },
@@ -277,7 +283,13 @@ impl ProcessManager for RelayManager {
         self.logs.lock().await.clear();
 
         let sync_relays = self.sync_relays.read().await.clone();
-        let config_path = self.write_relay_config(port, &sync_relays)?;
+        let launcher = self.config_store.load_launcher();
+        let nip42_auth = launcher
+            .local_relay
+            .as_ref()
+            .and_then(|lr| lr.nip42_auth)
+            .unwrap_or(true);
+        let config_path = self.write_relay_config(port, &sync_relays, nip42_auth)?;
 
         let mut child = Command::new(&executable)
             .args(["-config", &config_path.to_string_lossy()])

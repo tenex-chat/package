@@ -1,5 +1,6 @@
 mod dashboard;
 mod display;
+mod nostr;
 mod onboarding;
 mod repl;
 mod settings;

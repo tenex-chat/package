@@ -1,7 +1,98 @@
-use console::style;
+use std::io::{self, Write};
+use std::thread;
+use std::time::Duration;
 
-/// Print a section header with separator line.
-///   ─── Identity ───────────────────────
+use console::{colors_enabled, style, Style};
+use dialoguer::theme::ColorfulTheme;
+
+/// Accent color for step headers and interactive prompts.
+pub const ACCENT: u8 = 222; // gold
+/// Secondary color for informational highlights.
+pub const INFO: u8 = 117; // sky blue
+/// Color for selected/checked items.
+pub const SELECTED: u8 = 114; // bright green
+
+/// Build the TENEX dialoguer theme — gold accents, green checks, consistent everywhere.
+pub fn theme() -> ColorfulTheme {
+    ColorfulTheme {
+        prompt_prefix: style("?".to_string()).for_stderr().color256(ACCENT).bold(),
+        prompt_style: Style::new().for_stderr().bold(),
+        prompt_suffix: style("›".to_string()).for_stderr().color256(ACCENT),
+        success_prefix: style("✓".to_string()).for_stderr().green().bold(),
+        success_suffix: style("·".to_string()).for_stderr().dim(),
+        active_item_prefix: style("›".to_string()).for_stderr().color256(ACCENT).bold(),
+        inactive_item_prefix: style(" ".to_string()).for_stderr(),
+        active_item_style: Style::new().for_stderr().color256(ACCENT).bold(),
+        inactive_item_style: Style::new().for_stderr().color256(252),
+        checked_item_prefix: style("[✓]".to_string()).for_stderr().color256(SELECTED).bold(),
+        unchecked_item_prefix: style("[ ]".to_string()).for_stderr().color256(240),
+        values_style: Style::new().for_stderr().color256(INFO),
+        hint_style: Style::new().for_stderr().dim(),
+        defaults_style: Style::new().for_stderr().color256(INFO),
+        error_prefix: style("✘".to_string()).for_stderr().red(),
+        error_style: Style::new().for_stderr().red(),
+        picked_item_prefix: style("›".to_string()).for_stderr().color256(ACCENT),
+        unpicked_item_prefix: style(" ".to_string()).for_stderr(),
+        fuzzy_cursor_style: Style::new().for_stderr().color256(ACCENT).bold(),
+        fuzzy_match_highlight_style: Style::new().for_stderr().color256(ACCENT).bold(),
+    }
+}
+
+/// Stream text character-by-character to stdout with LLM-like timing.
+fn stream_chars(out: &mut io::StdoutLock<'_>, text: &str) {
+    for ch in text.chars() {
+        write!(out, "{}", ch).ok();
+        out.flush().ok();
+
+        let delay = match ch {
+            '.' | '!' | '?' | '—' => 60,
+            ',' | ';' | ':' => 35,
+            ' ' => 6,
+            '\n' => 30,
+            _ => 18,
+        };
+        thread::sleep(Duration::from_millis(delay));
+    }
+}
+
+/// Stream dim context text line-by-line with LLM-like animation.
+/// Use this for onboarding explanatory paragraphs.
+pub fn stream_context(text: &str) {
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    let use_ansi = colors_enabled();
+
+    for line in text.lines() {
+        write!(out, "  ").ok();
+        if use_ansi {
+            write!(out, "\x1b[2m").ok();
+        }
+        stream_chars(&mut out, line);
+        if use_ansi {
+            write!(out, "\x1b[0m").ok();
+        }
+        writeln!(out).ok();
+        out.flush().ok();
+    }
+}
+
+/// Print an onboarding step header with step number and color.
+///
+///   1  Identity
+///   ─────────────────────────────────────────
+pub fn step(number: usize, total: usize, title: &str) {
+    let rule = "─".repeat(45);
+    println!();
+    println!(
+        "  {}  {}",
+        style(format!("{}/{}", number, total)).color256(ACCENT).bold(),
+        style(title).color256(ACCENT).bold(),
+    );
+    println!("  {}", style(rule).color256(ACCENT).dim());
+    println!();
+}
+
+/// Print a section header (non-numbered, for dashboard/settings).
 pub fn section(title: &str) {
     let rule_len = 40usize.saturating_sub(title.len() + 2);
     let rule = "─".repeat(rule_len);
@@ -27,6 +118,15 @@ pub fn success(text: &str) {
     println!("  {} {}", style("✓").green().bold(), text);
 }
 
+/// Print a hint/tip with a colored arrow.
+pub fn hint(text: &str) {
+    println!(
+        "  {} {}",
+        style("→").color256(ACCENT),
+        style(text).color256(ACCENT)
+    );
+}
+
 /// Print a status line: service  ● running  detail
 pub fn service_status(name: &str, running: bool, detail: &str) {
     let (indicator, status_text) = if running {
@@ -44,7 +144,7 @@ pub fn service_status(name: &str, running: bool, detail: &str) {
 pub fn config_item(name: &str, value: &str, detail: &str) {
     println!(
         "    {} {:<12}{} {}",
-        style("●").cyan(),
+        style("●").color256(INFO),
         style(name).bold(),
         value,
         style(format!("({})", detail)).dim()
@@ -61,21 +161,47 @@ pub fn welcome() {
     println!();
     println!(
         "  {}",
-        style("Welcome to TENEX!").bold()
+        style("▲ T E N E X").color256(ACCENT).bold()
+    );
+    println!();
+    println!(
+        "  {}",
+        style("Your AI agent team, powered by Nostr.").bold()
     );
     println!(
         "  {}",
-        style("Let's get you set up.").dim()
+        style("Let's get everything set up.").dim()
     );
     println!();
+}
+
+/// Print the final setup summary banner.
+pub fn setup_complete() {
+    println!();
+    println!(
+        "  {} {}",
+        style("▲").color256(ACCENT).bold(),
+        style("Setup complete!").color256(ACCENT).bold(),
+    );
+    println!();
+}
+
+/// Print a summary line for the final recap.
+pub fn summary_line(label: &str, value: &str) {
+    println!(
+        "    {:<16}{}",
+        style(format!("{}:", label)).color256(INFO),
+        value
+    );
 }
 
 /// Print the dashboard greeting.
 pub fn dashboard_greeting() {
     println!();
     println!(
-        "  {}",
-        style("Hey! Here's what's running:").bold()
+        "  {} {}",
+        style("▲").color256(ACCENT).bold(),
+        style("Here's what's running:").bold()
     );
     println!();
 }

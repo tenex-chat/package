@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use console::style;
 use dialoguer::{Confirm, Select};
 use indicatif::ProgressBar;
 use tenex_orchestrator::config::ConfigStore;
@@ -20,6 +19,7 @@ pub async fn run(
     relay: &Arc<RelayManager>,
     ngrok: &Arc<NgrokManager>,
 ) -> Result<()> {
+    let theme = display::theme();
     loop {
         print_status(config_store, daemon, relay, ngrok).await;
 
@@ -29,15 +29,15 @@ pub async fn run(
             "Settings",
             "Quit",
         ];
-        let selection = Select::new()
-            .with_prompt(format!("{} What do you want to do?", style("?").blue().bold()))
+        let selection = Select::with_theme(&theme)
+            .with_prompt("What do you want to do?")
             .items(&choices)
             .default(0)
             .interact_opt()?;
 
         match selection {
             Some(0) => continue,
-            Some(1) => handle_services(daemon, relay, ngrok).await?,
+            Some(1) => handle_services(&theme, daemon, relay, ngrok).await?,
             Some(2) => settings::run(config_store).await?,
             Some(3) | None => break,
             _ => continue,
@@ -99,6 +99,7 @@ fn format_process_detail(status: ProcessStatus) -> String {
 }
 
 async fn handle_services(
+    theme: &dialoguer::theme::ColorfulTheme,
     daemon: &Arc<DaemonManager>,
     relay: &Arc<RelayManager>,
     ngrok: &Arc<NgrokManager>,
@@ -114,8 +115,8 @@ async fn handle_services(
         .map(|(name, status)| format!("{} — currently {}", name, status))
         .collect();
 
-    let selection = Select::new()
-        .with_prompt(format!("{} Which service?", style("?").blue().bold()))
+    let selection = Select::with_theme(theme)
+        .with_prompt("Which service?")
         .items(&choices)
         .interact_opt()?;
 
@@ -127,8 +128,8 @@ async fn handle_services(
 
     match status {
         ProcessStatus::Running => {
-            let stop = Confirm::new()
-                .with_prompt(format!("{} Stop {}?", style("?").blue().bold(), name))
+            let stop = Confirm::with_theme(theme)
+                .with_prompt(format!("Stop {}?", name))
                 .default(false)
                 .interact()?;
             if stop {
@@ -146,8 +147,8 @@ async fn handle_services(
             }
         }
         _ => {
-            let start = Confirm::new()
-                .with_prompt(format!("{} Start {}?", style("?").blue().bold(), name))
+            let start = Confirm::with_theme(theme)
+                .with_prompt(format!("Start {}?", name))
                 .default(true)
                 .interact()?;
             if start {

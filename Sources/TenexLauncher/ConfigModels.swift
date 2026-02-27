@@ -5,7 +5,6 @@ import Foundation
 struct TenexConfig: Codable {
     var whitelistedPubkeys: [String]?
     var tenexPrivateKey: String?
-    var tenexPublicKey: String?
     var backendName: String?
     var projectsBase: String?
     var relays: [String]?
@@ -17,8 +16,14 @@ struct TenexConfig: Codable {
     var compression: CompressionConfig?
     var escalation: EscalationConfig?
     var intervention: InterventionConfig?
-    var localRelay: LocalRelayConfig?
+}
+
+// MARK: - launcher.json
+
+struct LauncherConfig: Codable {
     var launchAtLogin: Bool?
+    var localRelay: LocalRelayConfig?
+    var tenexPublicKey: String?
 }
 
 struct LocalRelayConfig: Codable {
@@ -95,10 +100,56 @@ struct TenexProviders: Codable {
 }
 
 struct ProviderEntry: Codable {
-    var apiKey: String
+    var apiKeys: [String]
     var baseUrl: String?
     var timeout: Int?
     var options: [String: AnyCodable]?
+
+    var primaryKey: String? { apiKeys.first }
+
+    init(apiKey: String, baseUrl: String? = nil, timeout: Int? = nil, options: [String: AnyCodable]? = nil) {
+        self.apiKeys = [apiKey]
+        self.baseUrl = baseUrl
+        self.timeout = timeout
+        self.options = options
+    }
+
+    init(apiKeys: [String], baseUrl: String? = nil, timeout: Int? = nil, options: [String: AnyCodable]? = nil) {
+        self.apiKeys = apiKeys
+        self.baseUrl = baseUrl
+        self.timeout = timeout
+        self.options = options
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case apiKey
+        case baseUrl
+        case timeout
+        case options
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Accept both single string and array
+        if let array = try? container.decode([String].self, forKey: .apiKey) {
+            apiKeys = array
+        } else if let single = try? container.decode(String.self, forKey: .apiKey) {
+            apiKeys = [single]
+        } else {
+            apiKeys = []
+        }
+        baseUrl = try container.decodeIfPresent(String.self, forKey: .baseUrl)
+        timeout = try container.decodeIfPresent(Int.self, forKey: .timeout)
+        options = try container.decodeIfPresent([String: AnyCodable].self, forKey: .options)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(apiKeys, forKey: .apiKey)
+        try container.encodeIfPresent(baseUrl, forKey: .baseUrl)
+        try container.encodeIfPresent(timeout, forKey: .timeout)
+        try container.encodeIfPresent(options, forKey: .options)
+    }
 }
 
 // MARK: - llms.json

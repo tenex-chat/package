@@ -2,8 +2,7 @@ import ServiceManagement
 import SwiftUI
 
 struct GeneralConfigView: View {
-    @ObservedObject var store: ConfigStore
-    @ObservedObject var relayManager: RelayManager
+    @ObservedObject var orchestrator: OrchestratorManager
     @ObservedObject var negentropySync: NegentropySync
     @ObservedObject var pendingEventsQueue: PendingEventsQueue
     let tab: SidebarTab
@@ -38,10 +37,10 @@ struct GeneralConfigView: View {
 
             Section {
                 PubkeyListEditor(pubkeys: Binding(
-                    get: { store.config.whitelistedPubkeys ?? [] },
+                    get: { orchestrator.config.whitelistedPubkeys ?? [] },
                     set: {
-                        store.config.whitelistedPubkeys = $0.isEmpty ? nil : $0
-                        store.saveConfig()
+                        orchestrator.config.whitelistedPubkeys = $0.isEmpty ? nil : $0
+                        orchestrator.saveConfig()
                     }
                 ))
             } header: {
@@ -94,15 +93,15 @@ struct GeneralConfigView: View {
     }
 
     private var llmConfigNames: [String] {
-        store.llms.configurations.keys.sorted()
+        orchestrator.llms.configurations.keys.sorted()
     }
 
     private func llmBinding(_ keyPath: WritableKeyPath<TenexLLMs, String?>) -> Binding<String> {
         Binding(
-            get: { store.llms[keyPath: keyPath] ?? "" },
+            get: { orchestrator.llms[keyPath: keyPath] ?? "" },
             set: {
-                store.llms[keyPath: keyPath] = $0.isEmpty ? nil : $0
-                store.saveLLMs()
+                orchestrator.llms[keyPath: keyPath] = $0.isEmpty ? nil : $0
+                orchestrator.saveLLMs()
             }
         )
     }
@@ -115,10 +114,10 @@ struct GeneralConfigView: View {
                     .foregroundStyle(.secondary)
                 StringListEditor(
                     items: Binding(
-                        get: { store.config.relays ?? ["wss://tenex.chat"] },
+                        get: { orchestrator.config.relays ?? ["wss://tenex.chat"] },
                         set: {
-                            store.config.relays = $0.isEmpty ? nil : $0
-                            store.saveConfig()
+                            orchestrator.config.relays = $0.isEmpty ? nil : $0
+                            orchestrator.saveConfig()
                         }
                     ),
                     placeholder: "wss://relay.example.com"
@@ -133,7 +132,7 @@ struct GeneralConfigView: View {
         Section("Local Relay") {
             Toggle("Enable Local Relay", isOn: localRelayEnabledBinding)
 
-            if store.config.localRelay?.enabled == true {
+            if orchestrator.launcher.localRelay?.enabled == true {
                 Toggle("Auto-start with app", isOn: localRelayAutoStartBinding)
 
                 HStack {
@@ -142,8 +141,8 @@ struct GeneralConfigView: View {
                     TextField("Port", value: localRelayPortBinding, format: .number)
                         .frame(width: 80)
                         .multilineTextAlignment(.trailing)
-                        .disabled(relayManager.status == .running)
-                    if relayManager.status == .running {
+                        .disabled(orchestrator.relayStatus == .running)
+                    if orchestrator.relayStatus == .running {
                         Text("(restart required)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -153,10 +152,10 @@ struct GeneralConfigView: View {
                 HStack {
                     Text("Status")
                     Spacer()
-                    LocalRelayStatusView(status: relayManager.status)
+                    LocalRelayStatusView(status: orchestrator.relayStatus)
                 }
 
-                if relayManager.status == .running {
+                if orchestrator.relayStatus == .running {
                     HStack {
                         Text("Sync")
                         Spacer()
@@ -175,28 +174,10 @@ struct GeneralConfigView: View {
                 }
 
                 HStack {
-                    switch relayManager.status {
+                    switch orchestrator.relayStatus {
                     case .stopped, .failed:
                         Button("Start Relay") {
-                            Task {
-                                relayManager.configure(
-                                    port: store.config.localRelay?.port ?? 7777,
-                                    syncRelays: store.config.localRelay?.syncRelays ?? ["wss://tenex.chat"]
-                                )
-                                await relayManager.start()
-                                if relayManager.status == .running {
-                                    negentropySync.configure(
-                                        localRelayURL: relayManager.localRelayURL,
-                                        relayManager: relayManager
-                                    )
-                                    negentropySync.start()
-
-                                    // Drain pending events after manual start (waits for queue to load first)
-                                    _ = await pendingEventsQueue.drainWhenReady(
-                                        relayURL: relayManager.localRelayURL
-                                    )
-                                }
-                            }
+                            orchestrator.startRelay()
                         }
                     case .starting:
                         Button("Starting...") {}
@@ -204,7 +185,7 @@ struct GeneralConfigView: View {
                     case .running:
                         Button("Stop Relay") {
                             negentropySync.stop()
-                            relayManager.stop()
+                            orchestrator.stopRelay()
                         }
 
                         Button("Sync Now") {
@@ -215,7 +196,7 @@ struct GeneralConfigView: View {
                     }
                 }
 
-                if let error = relayManager.lastError {
+                if let error = orchestrator.relayError {
                     Text(error)
                         .font(.caption)
                         .foregroundStyle(.red)
@@ -237,8 +218,8 @@ struct GeneralConfigView: View {
                         } else {
                             try? SMAppService.mainApp.unregister()
                         }
-                        store.config.launchAtLogin = enabled
-                        store.saveConfig()
+                        orchestrator.launcher.launchAtLogin = enabled
+                        orchestrator.saveLauncher()
                     }
             }
 
@@ -256,13 +237,13 @@ struct GeneralConfigView: View {
 
             Section("Telemetry") {
                 Toggle("Enabled", isOn: Binding(
-                    get: { store.config.telemetry?.enabled ?? true },
+                    get: { orchestrator.config.telemetry?.enabled ?? true },
                     set: {
-                        if store.config.telemetry == nil {
-                            store.config.telemetry = TelemetryConfig()
+                        if orchestrator.config.telemetry == nil {
+                            orchestrator.config.telemetry = TelemetryConfig()
                         }
-                        store.config.telemetry?.enabled = $0
-                        store.saveConfig()
+                        orchestrator.config.telemetry?.enabled = $0
+                        orchestrator.saveConfig()
                     }
                 ))
             }
@@ -272,24 +253,24 @@ struct GeneralConfigView: View {
     private var globalSystemPromptSection: some View {
         Section("Global System Prompt") {
             Toggle("Enabled", isOn: Binding(
-                get: { store.config.globalSystemPrompt?.enabled ?? false },
+                get: { orchestrator.config.globalSystemPrompt?.enabled ?? false },
                 set: {
-                    if store.config.globalSystemPrompt == nil {
-                        store.config.globalSystemPrompt = GlobalSystemPrompt()
+                    if orchestrator.config.globalSystemPrompt == nil {
+                        orchestrator.config.globalSystemPrompt = GlobalSystemPrompt()
                     }
-                    store.config.globalSystemPrompt?.enabled = $0
-                    store.saveConfig()
+                    orchestrator.config.globalSystemPrompt?.enabled = $0
+                    orchestrator.saveConfig()
                 }
             ))
 
             TextEditor(text: Binding(
-                get: { store.config.globalSystemPrompt?.content ?? "" },
+                get: { orchestrator.config.globalSystemPrompt?.content ?? "" },
                 set: {
-                    if store.config.globalSystemPrompt == nil {
-                        store.config.globalSystemPrompt = GlobalSystemPrompt()
+                    if orchestrator.config.globalSystemPrompt == nil {
+                        orchestrator.config.globalSystemPrompt = GlobalSystemPrompt()
                     }
-                    store.config.globalSystemPrompt?.content = $0.isEmpty ? nil : $0
-                    store.saveConfig()
+                    orchestrator.config.globalSystemPrompt?.content = $0.isEmpty ? nil : $0
+                    orchestrator.saveConfig()
                 }
             ))
             .font(.system(.body, design: .monospaced))
@@ -303,10 +284,10 @@ struct GeneralConfigView: View {
         Section("Embedding Model") {
             Picker("Provider", selection: embedProviderBinding) {
                 Text("Local").tag("local")
-                if store.providers.providers["openai"] != nil {
+                if orchestrator.providers.providers["openai"] != nil {
                     Text("OpenAI").tag("openai")
                 }
-                if store.providers.providers["openrouter"] != nil {
+                if orchestrator.providers.providers["openrouter"] != nil {
                     Text("OpenRouter").tag("openrouter")
                 }
             }
@@ -320,7 +301,7 @@ struct GeneralConfigView: View {
     }
 
     private var embedModelsForProvider: [String] {
-        switch store.embed.provider ?? "local" {
+        switch orchestrator.embed.provider ?? "local" {
         case "openai":
             return ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"]
         case "openrouter":
@@ -332,9 +313,9 @@ struct GeneralConfigView: View {
 
     private var embedProviderBinding: Binding<String> {
         Binding(
-            get: { store.embed.provider ?? "local" },
+            get: { orchestrator.embed.provider ?? "local" },
             set: {
-                store.embed.provider = $0
+                orchestrator.embed.provider = $0
                 let models: [String]
                 switch $0 {
                 case "openai":
@@ -344,18 +325,18 @@ struct GeneralConfigView: View {
                 default:
                     models = ["Xenova/all-MiniLM-L6-v2", "Xenova/all-mpnet-base-v2", "Xenova/paraphrase-multilingual-MiniLM-L12-v2"]
                 }
-                store.embed.model = models.first
-                store.saveEmbed()
+                orchestrator.embed.model = models.first
+                orchestrator.saveEmbed()
             }
         )
     }
 
     private var embedModelBinding: Binding<String> {
         Binding(
-            get: { store.embed.model ?? embedModelsForProvider.first ?? "" },
+            get: { orchestrator.embed.model ?? embedModelsForProvider.first ?? "" },
             set: {
-                store.embed.model = $0
-                store.saveEmbed()
+                orchestrator.embed.model = $0
+                orchestrator.saveEmbed()
             }
         )
     }
@@ -373,7 +354,7 @@ struct GeneralConfigView: View {
     private static let imageSizes = ["1K", "2K", "4K"]
 
     private var hasOpenRouter: Bool {
-        store.providers.providers["openrouter"] != nil
+        orchestrator.providers.providers["openrouter"] != nil
     }
 
     private var imageGenerationSection: some View {
@@ -413,31 +394,31 @@ struct GeneralConfigView: View {
 
     private var imageModelBinding: Binding<String> {
         Binding(
-            get: { store.image.model ?? Self.imageModels.first ?? "" },
+            get: { orchestrator.image.model ?? Self.imageModels.first ?? "" },
             set: {
-                store.image.provider = "openrouter"
-                store.image.model = $0
-                store.saveImage()
+                orchestrator.image.provider = "openrouter"
+                orchestrator.image.model = $0
+                orchestrator.saveImage()
             }
         )
     }
 
     private var imageAspectRatioBinding: Binding<String> {
         Binding(
-            get: { store.image.defaultAspectRatio ?? "" },
+            get: { orchestrator.image.defaultAspectRatio ?? "" },
             set: {
-                store.image.defaultAspectRatio = $0.isEmpty ? nil : $0
-                store.saveImage()
+                orchestrator.image.defaultAspectRatio = $0.isEmpty ? nil : $0
+                orchestrator.saveImage()
             }
         )
     }
 
     private var imageSizeBinding: Binding<String> {
         Binding(
-            get: { store.image.defaultImageSize ?? "" },
+            get: { orchestrator.image.defaultImageSize ?? "" },
             set: {
-                store.image.defaultImageSize = $0.isEmpty ? nil : $0
-                store.saveImage()
+                orchestrator.image.defaultImageSize = $0.isEmpty ? nil : $0
+                orchestrator.saveImage()
             }
         )
     }
@@ -457,7 +438,7 @@ struct GeneralConfigView: View {
             Section {
                 Toggle("Enable Intervention", isOn: interventionEnabledBinding)
 
-                if store.config.intervention?.enabled == true {
+                if orchestrator.config.intervention?.enabled == true {
                     TextField("Reviewer Agent Slug", text: interventionAgentBinding)
 
                     DurationPicker(
@@ -488,7 +469,7 @@ struct GeneralConfigView: View {
             Section {
                 Toggle("Enable Compression", isOn: compressionEnabledBinding)
 
-                if store.config.compression?.enabled != false {
+                if orchestrator.config.compression?.enabled != false {
                     HStack {
                         Text("Compress When Tokens Exceed")
                         Spacer()
@@ -564,71 +545,71 @@ struct GeneralConfigView: View {
 
     private var escalationAgentBinding: Binding<String> {
         Binding(
-            get: { store.config.escalation?.agent ?? "" },
+            get: { orchestrator.config.escalation?.agent ?? "" },
             set: {
                 let value = $0.trimmingCharacters(in: .whitespaces)
                 if value.isEmpty {
-                    store.config.escalation = nil
+                    orchestrator.config.escalation = nil
                 } else {
-                    if store.config.escalation == nil {
-                        store.config.escalation = EscalationConfig()
+                    if orchestrator.config.escalation == nil {
+                        orchestrator.config.escalation = EscalationConfig()
                     }
-                    store.config.escalation?.agent = value
+                    orchestrator.config.escalation?.agent = value
                 }
-                store.saveConfig()
+                orchestrator.saveConfig()
             }
         )
     }
 
     private var interventionEnabledBinding: Binding<Bool> {
         Binding(
-            get: { store.config.intervention?.enabled ?? false },
+            get: { orchestrator.config.intervention?.enabled ?? false },
             set: {
-                if store.config.intervention == nil {
-                    store.config.intervention = InterventionConfig()
+                if orchestrator.config.intervention == nil {
+                    orchestrator.config.intervention = InterventionConfig()
                 }
-                store.config.intervention?.enabled = $0
-                if !$0 { store.config.intervention = nil }
-                store.saveConfig()
+                orchestrator.config.intervention?.enabled = $0
+                if !$0 { orchestrator.config.intervention = nil }
+                orchestrator.saveConfig()
             }
         )
     }
 
     private var interventionAgentBinding: Binding<String> {
         Binding(
-            get: { store.config.intervention?.agent ?? "" },
+            get: { orchestrator.config.intervention?.agent ?? "" },
             set: {
-                if store.config.intervention == nil {
-                    store.config.intervention = InterventionConfig(enabled: true)
+                if orchestrator.config.intervention == nil {
+                    orchestrator.config.intervention = InterventionConfig(enabled: true)
                 }
-                store.config.intervention?.agent = $0.isEmpty ? nil : $0
-                store.saveConfig()
+                orchestrator.config.intervention?.agent = $0.isEmpty ? nil : $0
+                orchestrator.saveConfig()
             }
         )
     }
 
     private var interventionReviewTimeoutBinding: Binding<Int> {
         Binding(
-            get: { store.config.intervention?.reviewTimeout ?? 300_000 },
+            get: { orchestrator.config.intervention?.reviewTimeout ?? 300_000 },
             set: {
-                if store.config.intervention == nil {
-                    store.config.intervention = InterventionConfig(enabled: true)
+                if orchestrator.config.intervention == nil {
+                    orchestrator.config.intervention = InterventionConfig(enabled: true)
                 }
-                store.config.intervention?.reviewTimeout = $0
-                store.saveConfig()
+                orchestrator.config.intervention?.reviewTimeout = $0
+                orchestrator.saveConfig()
             }
         )
     }
 
     private var interventionSkipIfActiveBinding: Binding<Int> {
         Binding(
-            get: { store.config.intervention?.skipIfActiveWithin ?? 120 },
+            get: { orchestrator.config.intervention?.skipIfActiveWithin ?? 120 },
             set: {
-                if store.config.intervention == nil {
-                    store.config.intervention = InterventionConfig(enabled: true)
+                if orchestrator.config.intervention == nil {
+                    orchestrator.config.intervention = InterventionConfig(enabled: true)
                 }
-                store.config.intervention?.skipIfActiveWithin = $0
-                store.saveConfig()
+                orchestrator.config.intervention?.skipIfActiveWithin = $0
+                orchestrator.saveConfig()
             }
         )
     }
@@ -637,88 +618,88 @@ struct GeneralConfigView: View {
 
     private var compressionEnabledBinding: Binding<Bool> {
         Binding(
-            get: { store.config.compression?.enabled ?? true },
+            get: { orchestrator.config.compression?.enabled ?? true },
             set: {
-                if store.config.compression == nil {
-                    store.config.compression = CompressionConfig()
+                if orchestrator.config.compression == nil {
+                    orchestrator.config.compression = CompressionConfig()
                 }
-                store.config.compression?.enabled = $0
-                store.saveConfig()
+                orchestrator.config.compression?.enabled = $0
+                orchestrator.saveConfig()
             }
         )
     }
 
     private var compressionThresholdBinding: Binding<Int> {
         Binding(
-            get: { store.config.compression?.tokenThreshold ?? 50_000 },
+            get: { orchestrator.config.compression?.tokenThreshold ?? 50_000 },
             set: {
-                if store.config.compression == nil {
-                    store.config.compression = CompressionConfig()
+                if orchestrator.config.compression == nil {
+                    orchestrator.config.compression = CompressionConfig()
                 }
-                store.config.compression?.tokenThreshold = $0
-                store.saveConfig()
+                orchestrator.config.compression?.tokenThreshold = $0
+                orchestrator.saveConfig()
             }
         )
     }
 
     private var compressionBudgetBinding: Binding<Int> {
         Binding(
-            get: { store.config.compression?.tokenBudget ?? 40_000 },
+            get: { orchestrator.config.compression?.tokenBudget ?? 40_000 },
             set: {
-                if store.config.compression == nil {
-                    store.config.compression = CompressionConfig()
+                if orchestrator.config.compression == nil {
+                    orchestrator.config.compression = CompressionConfig()
                 }
-                store.config.compression?.tokenBudget = $0
-                store.saveConfig()
+                orchestrator.config.compression?.tokenBudget = $0
+                orchestrator.saveConfig()
             }
         )
     }
 
     private var compressionWindowBinding: Binding<Int> {
         Binding(
-            get: { store.config.compression?.slidingWindowSize ?? 50 },
+            get: { orchestrator.config.compression?.slidingWindowSize ?? 50 },
             set: {
-                if store.config.compression == nil {
-                    store.config.compression = CompressionConfig()
+                if orchestrator.config.compression == nil {
+                    orchestrator.config.compression = CompressionConfig()
                 }
-                store.config.compression?.slidingWindowSize = $0
-                store.saveConfig()
+                orchestrator.config.compression?.slidingWindowSize = $0
+                orchestrator.saveConfig()
             }
         )
     }
 
     private var summarizationTimeoutBinding: Binding<Int> {
         Binding(
-            get: { store.config.summarization?.inactivityTimeout ?? 300_000 },
+            get: { orchestrator.config.summarization?.inactivityTimeout ?? 300_000 },
             set: {
-                if store.config.summarization == nil {
-                    store.config.summarization = SummarizationConfig()
+                if orchestrator.config.summarization == nil {
+                    orchestrator.config.summarization = SummarizationConfig()
                 }
-                store.config.summarization?.inactivityTimeout = $0
-                store.saveConfig()
+                orchestrator.config.summarization?.inactivityTimeout = $0
+                orchestrator.saveConfig()
             }
         )
     }
 
     private func bound(_ keyPath: WritableKeyPath<TenexConfig, String?>, default defaultValue: String) -> Binding<String> {
         Binding(
-            get: { store.config[keyPath: keyPath] ?? defaultValue },
+            get: { orchestrator.config[keyPath: keyPath] ?? defaultValue },
             set: {
-                store.config[keyPath: keyPath] = $0 == defaultValue ? nil : $0
-                store.saveConfig()
+                orchestrator.config[keyPath: keyPath] = $0 == defaultValue ? nil : $0
+                orchestrator.saveConfig()
             }
         )
     }
 
     private var logLevelBinding: Binding<String> {
         Binding(
-            get: { store.config.logging?.level ?? "info" },
+            get: { orchestrator.config.logging?.level ?? "info" },
             set: {
-                if store.config.logging == nil {
-                    store.config.logging = LoggingConfig()
+                if orchestrator.config.logging == nil {
+                    orchestrator.config.logging = LoggingConfig()
                 }
-                store.config.logging?.level = $0
-                store.saveConfig()
+                orchestrator.config.logging?.level = $0
+                orchestrator.saveConfig()
             }
         )
     }
@@ -727,39 +708,39 @@ struct GeneralConfigView: View {
 
     private var localRelayEnabledBinding: Binding<Bool> {
         Binding(
-            get: { store.config.localRelay?.enabled ?? false },
+            get: { orchestrator.launcher.localRelay?.enabled ?? false },
             set: {
-                if store.config.localRelay == nil {
-                    store.config.localRelay = LocalRelayConfig()
+                if orchestrator.launcher.localRelay == nil {
+                    orchestrator.launcher.localRelay = LocalRelayConfig()
                 }
-                store.config.localRelay?.enabled = $0
-                store.saveConfig()
+                orchestrator.launcher.localRelay?.enabled = $0
+                orchestrator.saveLauncher()
             }
         )
     }
 
     private var localRelayAutoStartBinding: Binding<Bool> {
         Binding(
-            get: { store.config.localRelay?.autoStart ?? true },
+            get: { orchestrator.launcher.localRelay?.autoStart ?? true },
             set: {
-                if store.config.localRelay == nil {
-                    store.config.localRelay = LocalRelayConfig()
+                if orchestrator.launcher.localRelay == nil {
+                    orchestrator.launcher.localRelay = LocalRelayConfig()
                 }
-                store.config.localRelay?.autoStart = $0
-                store.saveConfig()
+                orchestrator.launcher.localRelay?.autoStart = $0
+                orchestrator.saveLauncher()
             }
         )
     }
 
     private var localRelayPortBinding: Binding<Int> {
         Binding(
-            get: { store.config.localRelay?.port ?? 7777 },
+            get: { orchestrator.launcher.localRelay?.port ?? 7777 },
             set: {
-                if store.config.localRelay == nil {
-                    store.config.localRelay = LocalRelayConfig()
+                if orchestrator.launcher.localRelay == nil {
+                    orchestrator.launcher.localRelay = LocalRelayConfig()
                 }
-                store.config.localRelay?.port = $0
-                store.saveConfig()
+                orchestrator.launcher.localRelay?.port = $0
+                orchestrator.saveLauncher()
             }
         )
     }
@@ -768,14 +749,14 @@ struct GeneralConfigView: View {
 // MARK: - Local Relay Status View
 
 struct LocalRelayStatusView: View {
-    let status: RelayStatus
+    let status: FfiProcessStatus
 
     var body: some View {
         HStack(spacing: 6) {
             Circle()
                 .fill(statusColor)
                 .frame(width: 8, height: 8)
-            Text(status.label)
+            Text(statusLabel)
                 .foregroundStyle(.secondary)
         }
     }
@@ -786,6 +767,15 @@ struct LocalRelayStatusView: View {
         case .starting: .yellow
         case .stopped: .gray
         case .failed: .red
+        }
+    }
+
+    private var statusLabel: String {
+        switch status {
+        case .stopped: "Stopped"
+        case .starting: "Starting..."
+        case .running: "Running"
+        case .failed: "Failed"
         }
     }
 }

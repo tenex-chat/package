@@ -47,7 +47,7 @@ final class StrfryManager: ObservableObject {
 
     // Directories
     private var relayDir: URL {
-        ConfigStore.tenexDir.appendingPathComponent("relay")
+        OrchestratorManager.tenexDir.appendingPathComponent("relay")
     }
 
     private var dataDir: URL {

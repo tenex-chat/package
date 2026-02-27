@@ -4,11 +4,11 @@ enum ModelCatalogService {
     static func fetchModels(provider: String, providers: [String: ProviderEntry]) async throws -> [String] {
         switch provider {
         case "ollama":
-            let baseURL = providers["ollama"]?.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            let baseURL = providers["ollama"]?.primaryKey?.trimmingCharacters(in: .whitespacesAndNewlines)
             let resolvedURL = (baseURL?.isEmpty == false) ? baseURL! : "http://localhost:11434"
             return try await fetchOllamaModels(baseURL: resolvedURL)
         case "openrouter":
-            guard let rawApiKey = providers["openrouter"]?.apiKey else {
+            guard let rawApiKey = providers["openrouter"]?.primaryKey else {
                 throw ModelCatalogError.missingCredential("OpenRouter API key is missing.")
             }
             let apiKey = rawApiKey.trimmingCharacters(in: .whitespacesAndNewlines)

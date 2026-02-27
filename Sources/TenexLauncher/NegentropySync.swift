@@ -46,18 +46,18 @@ final class NegentropySync: ObservableObject {
     private var pollIntervalSeconds: TimeInterval = 10
     private var enabled: Bool = false
     private var pollTask: Task<Void, Never>?
-    private weak var relayManager: RelayManager?
+    private weak var orchestrator: OrchestratorManager?
 
     // MARK: - Configuration
 
     func configure(
         localRelayURL: String,
         pollIntervalSeconds: TimeInterval = 10,
-        relayManager: RelayManager
+        orchestrator: OrchestratorManager
     ) {
         self.localRelayURL = localRelayURL
         self.pollIntervalSeconds = pollIntervalSeconds
-        self.relayManager = relayManager
+        self.orchestrator = orchestrator
     }
 
     // MARK: - Lifecycle
@@ -86,7 +86,7 @@ final class NegentropySync: ObservableObject {
             while !Task.isCancelled {
                 guard let self, self.enabled else { break }
 
-                if let manager = self.relayManager, manager.status == .running {
+                if let orch = self.orchestrator, orch.relayStatus == .running {
                     await self.pollStats()
                 }
 
@@ -160,7 +160,7 @@ final class NegentropySync: ObservableObject {
     // MARK: - Manual Sync
 
     func syncNow() async {
-        guard let relayManager, relayManager.status == .running else {
+        guard let orchestrator, orchestrator.relayStatus == .running else {
             status = .lastSyncFailed(Date(), "Local relay not running")
             return
         }

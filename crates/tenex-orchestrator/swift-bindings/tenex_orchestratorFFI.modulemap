@@ -1,0 +1,7 @@
+module tenex_orchestratorFFI {
+    header "tenex_orchestratorFFI.h"
+    export *
+    use "Darwin"
+    use "_Builtin_stdbool"
+    use "_Builtin_stdint"
+}

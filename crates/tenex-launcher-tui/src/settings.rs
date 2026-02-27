@@ -2,13 +2,16 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use console::style;
-use dialoguer::{Confirm, Input, Password, Select};
+use dialoguer::theme::ColorfulTheme;
+use dialoguer::{Confirm, FuzzySelect, Input, Password, Select};
+use indicatif::ProgressBar;
 use tenex_orchestrator::config::*;
 use tenex_orchestrator::provider;
 
 use crate::display;
 
 pub async fn run(config_store: &Arc<ConfigStore>) -> Result<()> {
+    let theme = display::theme();
     loop {
         display::section("Settings");
 
@@ -38,31 +41,28 @@ pub async fn run(config_store: &Arc<ConfigStore>) -> Result<()> {
             "  ↩ Back to dashboard".into(),
         ];
 
-        let selection = Select::new()
-            .with_prompt(format!(
-                "{} What would you like to configure?",
-                style("?").blue().bold()
-            ))
+        let selection = Select::with_theme(&theme)
+            .with_prompt("What would you like to configure?")
             .items(&choices)
             .default(1)
             .interact_opt()?;
 
         match selection {
-            Some(1) => settings_providers(config_store).await?,
-            Some(2) => settings_llms(config_store)?,
-            Some(3) => settings_roles(config_store)?,
-            Some(4) => settings_embeddings(config_store)?,
-            Some(5) => settings_image(config_store)?,
-            Some(7) => settings_escalation(config_store)?,
-            Some(8) => settings_intervention(config_store)?,
-            Some(10) => settings_relays(config_store)?,
-            Some(11) => settings_local_relay(config_store)?,
-            Some(13) => settings_compression(config_store)?,
-            Some(14) => settings_summarization(config_store)?,
-            Some(16) => settings_identity(config_store)?,
-            Some(17) => settings_system_prompt(config_store)?,
-            Some(18) => settings_logging(config_store)?,
-            Some(19) => settings_telemetry(config_store)?,
+            Some(1) => settings_providers(config_store, &theme).await?,
+            Some(2) => settings_llms(config_store, &theme).await?,
+            Some(3) => settings_roles(config_store, &theme)?,
+            Some(4) => settings_embeddings(config_store, &theme)?,
+            Some(5) => settings_image(config_store, &theme)?,
+            Some(7) => settings_escalation(config_store, &theme)?,
+            Some(8) => settings_intervention(config_store, &theme)?,
+            Some(10) => settings_relays(config_store, &theme)?,
+            Some(11) => settings_local_relay(config_store, &theme)?,
+            Some(13) => settings_compression(config_store, &theme)?,
+            Some(14) => settings_summarization(config_store, &theme)?,
+            Some(16) => settings_identity(config_store, &theme)?,
+            Some(17) => settings_system_prompt(config_store, &theme)?,
+            Some(18) => settings_logging(config_store, &theme)?,
+            Some(19) => settings_telemetry(config_store, &theme)?,
             Some(20) | None => break,
             _ => continue, // Section headers — no-op
         }
@@ -71,7 +71,7 @@ pub async fn run(config_store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-async fn settings_providers(store: &Arc<ConfigStore>) -> Result<()> {
+async fn settings_providers(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut providers = store.load_providers();
     let display_names = provider::provider_display_names();
 
@@ -98,11 +98,8 @@ async fn settings_providers(store: &Arc<ConfigStore>) -> Result<()> {
     display::blank();
 
     let choices = vec!["Add a provider", "Remove a provider", "Back"];
-    let selection = Select::new()
-        .with_prompt(format!(
-            "{} What do you want to do?",
-            style("?").blue().bold()
-        ))
+    let selection = Select::with_theme(theme)
+        .with_prompt("What do you want to do?")
         .items(&choices)
         .default(0)
         .interact_opt()?;
@@ -125,19 +122,16 @@ async fn settings_providers(store: &Arc<ConfigStore>) -> Result<()> {
                 .map(|&id| display_names.get(id).copied().unwrap_or(id))
                 .collect();
 
-            let sel = Select::new()
-                .with_prompt(format!(
-                    "{} Which provider?",
-                    style("?").blue().bold()
-                ))
+            let sel = Select::with_theme(theme)
+                .with_prompt("Which provider?")
                 .items(&names)
                 .interact_opt()?;
 
             if let Some(idx) = sel {
                 let provider_id = available[idx];
                 if provider::requires_api_key(provider_id) {
-                    let key: String = Password::new()
-                        .with_prompt(format!("{} API key", style("?").blue().bold()))
+                    let key: String = Password::with_theme(theme)
+                        .with_prompt("API key")
                         .interact()?;
                     providers
                         .providers
@@ -167,11 +161,8 @@ async fn settings_providers(store: &Arc<ConfigStore>) -> Result<()> {
                 })
                 .collect();
 
-            let sel = Select::new()
-                .with_prompt(format!(
-                    "{} Remove which provider?",
-                    style("?").blue().bold()
-                ))
+            let sel = Select::with_theme(theme)
+                .with_prompt("Remove which provider?")
                 .items(&names)
                 .interact_opt()?;
 
@@ -187,18 +178,380 @@ async fn settings_providers(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_llms(store: &Arc<ConfigStore>) -> Result<()> {
-    let llms = store.load_llms();
-    display::section("LLMs");
-    for (name, config) in &llms.configurations {
-        display::config_item(name, &config.display_model(), config.provider());
+async fn settings_llms(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
+    loop {
+        let mut llms = store.load_llms();
+        display::section("LLMs");
+
+        // Build item list: one row per config + Add + Back
+        let mut names: Vec<String> = llms.configurations.keys().cloned().collect();
+        names.sort();
+
+        let mut items: Vec<String> = names
+            .iter()
+            .map(|n| {
+                let cfg = &llms.configurations[n];
+                let padded = format!("{:<20}", n);
+                format!(
+                    "{} {} {}",
+                    style(padded).color256(display::ACCENT),
+                    style(cfg.display_model()).bold(),
+                    style(format!("({})", cfg.provider())).dim(),
+                )
+            })
+            .collect();
+        items.push(format!("{}", style("+ Add new LLM").color256(display::INFO)));
+        items.push(format!("{}", style("↩ Back").dim()));
+
+        let add_idx = items.len() - 2;
+        let back_idx = items.len() - 1;
+
+        let sel = Select::with_theme(theme)
+            .with_prompt("Select an LLM to edit, or add a new one")
+            .items(&items)
+            .default(back_idx)
+            .interact_opt()?;
+
+        match sel {
+            None => break,
+            Some(i) if i == back_idx => break,
+            Some(i) if i == add_idx => {
+                if let Some(new_name) = llm_add(store, theme, &llms).await? {
+                    display::success(&format!("\"{}\" added.", new_name));
+                }
+            }
+            Some(i) => {
+                let cfg_name = names[i].clone();
+                llm_edit(store, theme, &mut llms, &cfg_name).await?;
+            }
+        }
     }
-    display::blank();
-    display::context("LLM editing coming soon. Use config files directly for now.");
     Ok(())
 }
 
-fn settings_roles(store: &Arc<ConfigStore>) -> Result<()> {
+/// Prompt to create a new LLM configuration. Returns the name if one was created.
+async fn llm_add(
+    store: &Arc<ConfigStore>,
+    theme: &ColorfulTheme,
+    llms: &tenex_orchestrator::config::TenexLLMs,
+) -> Result<Option<String>> {
+    use tenex_orchestrator::config::{LLMConfiguration, StandardLLM};
+
+    let providers = store.load_providers();
+    if providers.providers.is_empty() {
+        display::context("No providers connected. Add a provider first.");
+        return Ok(None);
+    }
+
+    let name: String = Input::with_theme(theme)
+        .with_prompt("Config name (e.g. \"GPT-4o\", \"Local\")")
+        .interact_text()?;
+    if name.is_empty() {
+        return Ok(None);
+    }
+    if llms.configurations.contains_key(&name) {
+        display::context(&format!("\"{}\" already exists.", name));
+        return Ok(None);
+    }
+
+    let provider_ids: Vec<&str> = provider::PROVIDER_LIST_ORDER
+        .iter()
+        .copied()
+        .filter(|&id| providers.providers.contains_key(id))
+        .collect();
+    let display_names = provider::provider_display_names();
+    let provider_labels: Vec<&str> = provider_ids
+        .iter()
+        .map(|&id| display_names.get(id).copied().unwrap_or(id))
+        .collect();
+
+    let prov_sel = Select::with_theme(theme)
+        .with_prompt("Provider")
+        .items(&provider_labels)
+        .default(0)
+        .interact_opt()?;
+    let Some(pidx) = prov_sel else {
+        return Ok(None);
+    };
+    let provider_id = provider_ids[pidx];
+
+    let model = pick_model(theme, provider_id, &providers).await?;
+    let Some(model) = model else {
+        return Ok(None);
+    };
+
+    let mut llms = store.load_llms();
+    llms.configurations
+        .insert(name.clone(), LLMConfiguration::Standard(StandardLLM::new(provider_id, &model)));
+    if llms.default_config.is_none() {
+        llms.default_config = Some(name.clone());
+    }
+    store.save_llms(&llms)?;
+    Ok(Some(name))
+}
+
+/// Edit or delete an existing LLM configuration.
+async fn llm_edit(
+    store: &Arc<ConfigStore>,
+    theme: &ColorfulTheme,
+    llms: &mut tenex_orchestrator::config::TenexLLMs,
+    cfg_name: &str,
+) -> Result<()> {
+    use tenex_orchestrator::config::{LLMConfiguration, StandardLLM};
+
+    let is_meta = llms.configurations.get(cfg_name).map(|c| c.is_meta()).unwrap_or(false);
+
+    let mut actions = vec![];
+    if !is_meta {
+        actions.push("Change provider");
+        actions.push("Change model");
+    }
+    actions.push("Rename");
+    actions.push("Delete");
+    actions.push("Back");
+
+    let sel = Select::with_theme(theme)
+        .with_prompt(format!("{}", style(cfg_name).color256(display::ACCENT).bold()))
+        .items(&actions)
+        .default(0)
+        .interact_opt()?;
+
+    match sel {
+        None => {}
+        Some(i) => match actions[i] {
+            "Change provider" => {
+                let providers = store.load_providers();
+                let provider_ids: Vec<&str> = provider::PROVIDER_LIST_ORDER
+                    .iter()
+                    .copied()
+                    .filter(|&id| providers.providers.contains_key(id))
+                    .collect();
+                let display_names = provider::provider_display_names();
+                let labels: Vec<&str> = provider_ids
+                    .iter()
+                    .map(|&id| display_names.get(id).copied().unwrap_or(id))
+                    .collect();
+
+                if let Some(pidx) = Select::with_theme(theme)
+                    .with_prompt("New provider")
+                    .items(&labels)
+                    .interact_opt()?
+                {
+                    let provider_id = provider_ids[pidx];
+                    if let Some(model) = pick_model(theme, provider_id, &providers).await? {
+                        llms.configurations.insert(
+                            cfg_name.to_string(),
+                            LLMConfiguration::Standard(StandardLLM::new(provider_id, &model)),
+                        );
+                        store.save_llms(llms)?;
+                        display::success("Provider and model updated.");
+                    }
+                }
+            }
+            "Change model" => {
+                let providers = store.load_providers();
+                let current_provider = llms.configurations[cfg_name].provider().to_string();
+                if let Some(model) = pick_model(theme, &current_provider, &providers).await? {
+                    if let LLMConfiguration::Standard(s) =
+                        llms.configurations.get_mut(cfg_name).unwrap()
+                    {
+                        s.model = model;
+                    }
+                    store.save_llms(llms)?;
+                    display::success("Model updated.");
+                }
+            }
+            "Rename" => {
+                let new_name: String = Input::with_theme(theme)
+                    .with_prompt("New name")
+                    .default(cfg_name.to_string())
+                    .interact_text()?;
+                if !new_name.is_empty() && new_name != cfg_name {
+                    let cfg = llms.configurations.remove(cfg_name).unwrap();
+                    // Update any role references
+                    let old = cfg_name.to_string();
+                    for role in [
+                        &mut llms.default_config,
+                        &mut llms.summarization,
+                        &mut llms.supervision,
+                        &mut llms.search,
+                        &mut llms.prompt_compilation,
+                        &mut llms.compression,
+                    ] {
+                        if role.as_deref() == Some(&old) {
+                            *role = Some(new_name.clone());
+                        }
+                    }
+                    llms.configurations.insert(new_name.clone(), cfg);
+                    store.save_llms(llms)?;
+                    display::success(&format!("Renamed to \"{}\".", new_name));
+                }
+            }
+            "Delete" => {
+                llms.configurations.remove(cfg_name);
+                // Clear role references
+                for role in [
+                    &mut llms.default_config,
+                    &mut llms.summarization,
+                    &mut llms.supervision,
+                    &mut llms.search,
+                    &mut llms.prompt_compilation,
+                    &mut llms.compression,
+                ] {
+                    if role.as_deref() == Some(cfg_name) {
+                        *role = None;
+                    }
+                }
+                store.save_llms(llms)?;
+                display::success(&format!("\"{}\" deleted.", cfg_name));
+            }
+            _ => {}
+        },
+    }
+
+    Ok(())
+}
+
+/// For a given provider, show a pick-list or fuzzy search; fall back to text input.
+async fn pick_model(
+    theme: &ColorfulTheme,
+    provider_id: &str,
+    providers: &tenex_orchestrator::config::TenexProviders,
+) -> Result<Option<String>> {
+    match provider_id {
+        "ollama" => {
+            let base_url = providers
+                .providers
+                .get("ollama")
+                .and_then(|e| e.primary_key())
+                .unwrap_or("http://localhost:11434");
+            let models = provider::fetch_ollama_models(base_url).await;
+            if models.is_empty() {
+                display::context("No Ollama models found. Run `ollama pull <model>` first.");
+                return Ok(None);
+            }
+            let items: Vec<String> = models.iter().map(|m| ollama_model_label(m)).collect();
+            let sel = Select::with_theme(theme)
+                .with_prompt("Model")
+                .items(&items)
+                .default(0)
+                .interact_opt()?;
+            return Ok(sel.map(|i| models[i].name.clone()));
+        }
+        "openrouter" => {
+            let spinner = fetch_spinner("Fetching OpenRouter models...");
+            let api_key = providers
+                .providers
+                .get("openrouter")
+                .and_then(|e| e.primary_key())
+                .unwrap_or("")
+                .to_string();
+            let models = provider::fetch_openrouter_models(&api_key).await;
+            spinner.finish_and_clear();
+
+            if models.is_empty() {
+                display::context("Could not fetch model list. Enter the model ID manually.");
+                let model: String = Input::with_theme(theme)
+                    .with_prompt("Model ID (e.g. anthropic/claude-3-5-sonnet)")
+                    .interact_text()?;
+                return Ok(if model.is_empty() { None } else { Some(model) });
+            }
+
+            let items: Vec<String> = models.iter().map(|m| openrouter_model_label(m)).collect();
+            let sel = FuzzySelect::with_theme(theme)
+                .with_prompt("Search models (type to filter)")
+                .items(&items)
+                .default(0)
+                .interact_opt()?;
+            return Ok(sel.map(|i| models[i].id.clone()));
+        }
+        "codex-app-server" => {
+            let spinner = fetch_spinner("Fetching Codex models...");
+            let models = provider::fetch_codex_models().await;
+            spinner.finish_and_clear();
+
+            if models.is_empty() {
+                let model: String = Input::with_theme(theme)
+                    .with_prompt("Model name")
+                    .default("gpt-5.1-codex-max".to_string())
+                    .interact_text()?;
+                return Ok(if model.is_empty() { None } else { Some(model) });
+            }
+
+            let items: Vec<String> = models.iter().map(|m| codex_model_label(m)).collect();
+            let default_idx = models.iter().position(|m| m.is_default).unwrap_or(0);
+            let sel = Select::with_theme(theme)
+                .with_prompt("Model")
+                .items(&items)
+                .default(default_idx)
+                .interact_opt()?;
+            return Ok(sel.map(|i| models[i].id.clone()));
+        }
+        _ => {}
+    }
+
+    let model: String = Input::with_theme(theme)
+        .with_prompt("Model name")
+        .interact_text()?;
+    Ok(if model.is_empty() { None } else { Some(model) })
+}
+
+fn fetch_spinner(msg: &str) -> ProgressBar {
+    let sp = ProgressBar::new_spinner();
+    sp.set_message(msg.to_string());
+    sp.enable_steady_tick(std::time::Duration::from_millis(80));
+    sp
+}
+
+fn ollama_model_label(m: &provider::OllamaModel) -> String {
+    let name = format!("{:<32}", m.name);
+    let params = m
+        .parameter_size
+        .as_deref()
+        .map(|p| format!("{:<6}", p))
+        .unwrap_or_else(|| "      ".to_string());
+    let quant = m
+        .quantization
+        .as_deref()
+        .map(|q| format!("{:<10}", q))
+        .unwrap_or_else(|| "          ".to_string());
+    let size = m.size_display();
+    format!(
+        "{} {} {} {}",
+        style(name).color256(display::ACCENT),
+        style(params).color256(display::INFO),
+        style(quant).dim(),
+        style(size).dim(),
+    )
+}
+
+fn openrouter_model_label(m: &provider::OpenRouterModel) -> String {
+    let id = format!("{:<50}", m.id);
+    let ctx = format!("{:>6}", m.context_display());
+    let price = m.price_display();
+    format!(
+        "{} {}  {}",
+        style(id).color256(display::ACCENT),
+        style(ctx).dim(),
+        style(price).color256(display::INFO),
+    )
+}
+
+fn codex_model_label(m: &provider::CodexModel) -> String {
+    let id = format!("{:<30}", m.id);
+    let desc = if m.is_default {
+        format!("{} (default)", m.display_name)
+    } else {
+        m.display_name.clone()
+    };
+    format!(
+        "{} {}",
+        style(id).color256(display::ACCENT),
+        style(desc).dim(),
+    )
+}
+
+fn settings_roles(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let llms = store.load_llms();
     display::section("Roles");
     let roles = [
@@ -243,11 +596,8 @@ fn settings_roles(store: &Arc<ConfigStore>) -> Result<()> {
         .collect();
     role_choices.push("Back".into());
 
-    let sel = Select::new()
-        .with_prompt(format!(
-            "{} Edit a role assignment?",
-            style("?").blue().bold()
-        ))
+    let sel = Select::with_theme(theme)
+        .with_prompt("Edit a role assignment?")
         .items(&role_choices)
         .interact_opt()?;
 
@@ -255,12 +605,8 @@ fn settings_roles(store: &Arc<ConfigStore>) -> Result<()> {
         if idx < role_names.len() {
             let mut model_choices = config_names.clone();
             model_choices.push("(unset)".into());
-            let model_sel = Select::new()
-                .with_prompt(format!(
-                    "{} Assign {} to which model?",
-                    style("?").blue().bold(),
-                    role_names[idx]
-                ))
+            let model_sel = Select::with_theme(theme)
+                .with_prompt(format!("Assign {} to which model?", role_names[idx]))
                 .items(&model_choices)
                 .interact_opt()?;
 
@@ -289,7 +635,7 @@ fn settings_roles(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_embeddings(store: &Arc<ConfigStore>) -> Result<()> {
+fn settings_embeddings(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut embed = store.load_embed();
     display::section("Embeddings");
     println!(
@@ -300,8 +646,8 @@ fn settings_embeddings(store: &Arc<ConfigStore>) -> Result<()> {
     display::blank();
 
     let providers = vec!["local", "openai", "openrouter"];
-    let sel = Select::new()
-        .with_prompt(format!("{} Provider", style("?").blue().bold()))
+    let sel = Select::with_theme(theme)
+        .with_prompt("Provider")
         .items(&providers)
         .default(0)
         .interact_opt()?;
@@ -323,8 +669,8 @@ fn settings_embeddings(store: &Arc<ConfigStore>) -> Result<()> {
             _ => vec![],
         };
 
-        let model_sel = Select::new()
-            .with_prompt(format!("{} Model", style("?").blue().bold()))
+        let model_sel = Select::with_theme(theme)
+            .with_prompt("Model")
             .items(&models)
             .default(0)
             .interact_opt()?;
@@ -339,7 +685,7 @@ fn settings_embeddings(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_image(store: &Arc<ConfigStore>) -> Result<()> {
+fn settings_image(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut image = store.load_image();
     display::section("Image Generation");
     println!(
@@ -362,8 +708,8 @@ fn settings_image(store: &Arc<ConfigStore>) -> Result<()> {
         "black-forest-labs/flux.2-klein-4b",
         "google/gemini-2.5-flash-image",
     ];
-    let sel = Select::new()
-        .with_prompt(format!("{} Model", style("?").blue().bold()))
+    let sel = Select::with_theme(theme)
+        .with_prompt("Model")
         .items(&models)
         .default(0)
         .interact_opt()?;
@@ -373,11 +719,8 @@ fn settings_image(store: &Arc<ConfigStore>) -> Result<()> {
         image.model = Some(models[idx].to_string());
 
         let ratios = vec!["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"];
-        let ratio_sel = Select::new()
-            .with_prompt(format!(
-                "{} Default aspect ratio",
-                style("?").blue().bold()
-            ))
+        let ratio_sel = Select::with_theme(theme)
+            .with_prompt("Default aspect ratio")
             .items(&ratios)
             .default(0)
             .interact_opt()?;
@@ -387,11 +730,8 @@ fn settings_image(store: &Arc<ConfigStore>) -> Result<()> {
         }
 
         let sizes = vec!["1K", "2K", "4K"];
-        let size_sel = Select::new()
-            .with_prompt(format!(
-                "{} Default image size",
-                style("?").blue().bold()
-            ))
+        let size_sel = Select::with_theme(theme)
+            .with_prompt("Default image size")
             .items(&sizes)
             .default(1)
             .interact_opt()?;
@@ -407,7 +747,7 @@ fn settings_image(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_escalation(store: &Arc<ConfigStore>) -> Result<()> {
+fn settings_escalation(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut config = store.load_config();
     display::section("Escalation");
     let current = config
@@ -418,11 +758,8 @@ fn settings_escalation(store: &Arc<ConfigStore>) -> Result<()> {
     println!("  Current escalation agent: {}", current);
     display::blank();
 
-    let agent: String = Input::new()
-        .with_prompt(format!(
-            "{} Agent slug (empty to disable)",
-            style("?").blue().bold()
-        ))
+    let agent: String = Input::with_theme(theme)
+        .with_prompt("Agent slug (empty to disable)")
         .allow_empty(true)
         .interact_text()?;
 
@@ -438,7 +775,7 @@ fn settings_escalation(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_intervention(store: &Arc<ConfigStore>) -> Result<()> {
+fn settings_intervention(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut config = store.load_config();
     display::section("Intervention");
     let intervention = config.intervention.clone().unwrap_or_default();
@@ -456,33 +793,24 @@ fn settings_intervention(store: &Arc<ConfigStore>) -> Result<()> {
     );
     display::blank();
 
-    let enabled = Confirm::new()
-        .with_prompt(format!(
-            "{} Enable intervention?",
-            style("?").blue().bold()
-        ))
+    let enabled = Confirm::with_theme(theme)
+        .with_prompt("Enable intervention?")
         .default(intervention.enabled.unwrap_or(false))
         .interact()?;
 
     if enabled {
-        let agent: String = Input::new()
-            .with_prompt(format!("{} Agent slug", style("?").blue().bold()))
+        let agent: String = Input::with_theme(theme)
+            .with_prompt("Agent slug")
             .default(intervention.agent.unwrap_or_default())
             .interact_text()?;
 
-        let timeout: u64 = Input::new()
-            .with_prompt(format!(
-                "{} Review timeout (ms)",
-                style("?").blue().bold()
-            ))
+        let timeout: u64 = Input::with_theme(theme)
+            .with_prompt("Review timeout (ms)")
             .default(intervention.review_timeout.unwrap_or(300000))
             .interact_text()?;
 
-        let skip_within: u64 = Input::new()
-            .with_prompt(format!(
-                "{} Skip if active within (seconds)",
-                style("?").blue().bold()
-            ))
+        let skip_within: u64 = Input::with_theme(theme)
+            .with_prompt("Skip if active within (seconds)")
             .default(intervention.skip_if_active_within.unwrap_or(120))
             .interact_text()?;
 
@@ -504,7 +832,7 @@ fn settings_intervention(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_relays(store: &Arc<ConfigStore>) -> Result<()> {
+fn settings_relays(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut config = store.load_config();
     display::section("Relays");
     let relays = config.relays.clone().unwrap_or_default();
@@ -518,22 +846,16 @@ fn settings_relays(store: &Arc<ConfigStore>) -> Result<()> {
     display::blank();
 
     let choices = vec!["Add a relay", "Remove a relay", "Back"];
-    let sel = Select::new()
-        .with_prompt(format!(
-            "{} What do you want to do?",
-            style("?").blue().bold()
-        ))
+    let sel = Select::with_theme(theme)
+        .with_prompt("What do you want to do?")
         .items(&choices)
         .default(0)
         .interact_opt()?;
 
     match sel {
         Some(0) => {
-            let url: String = Input::new()
-                .with_prompt(format!(
-                    "{} Relay URL (ws:// or wss://)",
-                    style("?").blue().bold()
-                ))
+            let url: String = Input::with_theme(theme)
+                .with_prompt("Relay URL (ws:// or wss://)")
                 .interact_text()?;
             let mut relays = config.relays.unwrap_or_default();
             relays.push(url);
@@ -545,11 +867,8 @@ fn settings_relays(store: &Arc<ConfigStore>) -> Result<()> {
             if relays.is_empty() {
                 display::context("Nothing to remove.");
             } else {
-                let sel = Select::new()
-                    .with_prompt(format!(
-                        "{} Remove which relay?",
-                        style("?").blue().bold()
-                    ))
+                let sel = Select::with_theme(theme)
+                    .with_prompt("Remove which relay?")
                     .items(&relays)
                     .interact_opt()?;
                 if let Some(idx) = sel {
@@ -567,7 +886,7 @@ fn settings_relays(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_local_relay(store: &Arc<ConfigStore>) -> Result<()> {
+fn settings_local_relay(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut launcher = store.load_launcher();
     let lr = launcher.local_relay.clone().unwrap_or_default();
     display::section("Local Relay");
@@ -576,25 +895,19 @@ fn settings_local_relay(store: &Arc<ConfigStore>) -> Result<()> {
     println!("  Ngrok: {}", lr.ngrok_enabled.unwrap_or(false));
     display::blank();
 
-    let enabled = Confirm::new()
-        .with_prompt(format!(
-            "{} Enable local relay?",
-            style("?").blue().bold()
-        ))
+    let enabled = Confirm::with_theme(theme)
+        .with_prompt("Enable local relay?")
         .default(lr.enabled.unwrap_or(false))
         .interact()?;
 
     if enabled {
-        let port: u16 = Input::new()
-            .with_prompt(format!("{} Port", style("?").blue().bold()))
+        let port: u16 = Input::with_theme(theme)
+            .with_prompt("Port")
             .default(lr.port.unwrap_or(7777))
             .interact_text()?;
 
-        let ngrok = Confirm::new()
-            .with_prompt(format!(
-                "{} Enable ngrok tunnel?",
-                style("?").blue().bold()
-            ))
+        let ngrok = Confirm::with_theme(theme)
+            .with_prompt("Enable ngrok tunnel?")
             .default(lr.ngrok_enabled.unwrap_or(false))
             .interact()?;
 
@@ -617,7 +930,7 @@ fn settings_local_relay(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_compression(store: &Arc<ConfigStore>) -> Result<()> {
+fn settings_compression(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut config = store.load_config();
     let comp = config.compression.clone().unwrap_or_default();
     display::section("Compression");
@@ -633,33 +946,24 @@ fn settings_compression(store: &Arc<ConfigStore>) -> Result<()> {
     );
     display::blank();
 
-    let enabled = Confirm::new()
-        .with_prompt(format!(
-            "{} Enable compression?",
-            style("?").blue().bold()
-        ))
+    let enabled = Confirm::with_theme(theme)
+        .with_prompt("Enable compression?")
         .default(comp.enabled.unwrap_or(true))
         .interact()?;
 
     if enabled {
-        let threshold: u64 = Input::new()
-            .with_prompt(format!(
-                "{} Token threshold",
-                style("?").blue().bold()
-            ))
+        let threshold: u64 = Input::with_theme(theme)
+            .with_prompt("Token threshold")
             .default(comp.token_threshold.unwrap_or(50000))
             .interact_text()?;
 
-        let budget: u64 = Input::new()
-            .with_prompt(format!("{} Token budget", style("?").blue().bold()))
+        let budget: u64 = Input::with_theme(theme)
+            .with_prompt("Token budget")
             .default(comp.token_budget.unwrap_or(40000))
             .interact_text()?;
 
-        let window: u64 = Input::new()
-            .with_prompt(format!(
-                "{} Sliding window size",
-                style("?").blue().bold()
-            ))
+        let window: u64 = Input::with_theme(theme)
+            .with_prompt("Sliding window size")
             .default(comp.sliding_window_size.unwrap_or(50))
             .interact_text()?;
 
@@ -681,7 +985,7 @@ fn settings_compression(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_summarization(store: &Arc<ConfigStore>) -> Result<()> {
+fn settings_summarization(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut config = store.load_config();
     let summ = config.summarization.clone().unwrap_or_default();
     display::section("Summarization");
@@ -692,11 +996,8 @@ fn settings_summarization(store: &Arc<ConfigStore>) -> Result<()> {
     );
     display::blank();
 
-    let timeout: u64 = Input::new()
-        .with_prompt(format!(
-            "{} Inactivity timeout (ms)",
-            style("?").blue().bold()
-        ))
+    let timeout: u64 = Input::with_theme(theme)
+        .with_prompt("Inactivity timeout (ms)")
         .default(summ.inactivity_timeout.unwrap_or(300000))
         .interact_text()?;
 
@@ -708,7 +1009,7 @@ fn settings_summarization(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_identity(store: &Arc<ConfigStore>) -> Result<()> {
+fn settings_identity(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut config = store.load_config();
     display::section("Identity");
     let pubkeys = config.whitelisted_pubkeys.clone().unwrap_or_default();
@@ -723,22 +1024,16 @@ fn settings_identity(store: &Arc<ConfigStore>) -> Result<()> {
     display::blank();
 
     let choices = vec!["Add a pubkey", "Remove a pubkey", "Back"];
-    let sel = Select::new()
-        .with_prompt(format!(
-            "{} What do you want to do?",
-            style("?").blue().bold()
-        ))
+    let sel = Select::with_theme(theme)
+        .with_prompt("What do you want to do?")
         .items(&choices)
         .default(0)
         .interact_opt()?;
 
     match sel {
         Some(0) => {
-            let pk: String = Input::new()
-                .with_prompt(format!(
-                    "{} Pubkey (hex or npub)",
-                    style("?").blue().bold()
-                ))
+            let pk: String = Input::with_theme(theme)
+                .with_prompt("Pubkey (hex or npub)")
                 .interact_text()?;
             let mut pubkeys = config.whitelisted_pubkeys.unwrap_or_default();
             pubkeys.push(pk);
@@ -750,11 +1045,8 @@ fn settings_identity(store: &Arc<ConfigStore>) -> Result<()> {
             if pubkeys.is_empty() {
                 display::context("Nothing to remove.");
             } else {
-                let sel = Select::new()
-                    .with_prompt(format!(
-                        "{} Remove which pubkey?",
-                        style("?").blue().bold()
-                    ))
+                let sel = Select::with_theme(theme)
+                    .with_prompt("Remove which pubkey?")
                     .items(&pubkeys)
                     .interact_opt()?;
                 if let Some(idx) = sel {
@@ -772,7 +1064,7 @@ fn settings_identity(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_system_prompt(store: &Arc<ConfigStore>) -> Result<()> {
+fn settings_system_prompt(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut config = store.load_config();
     let prompt = config.global_system_prompt.clone().unwrap_or_default();
     display::section("System Prompt");
@@ -788,20 +1080,14 @@ fn settings_system_prompt(store: &Arc<ConfigStore>) -> Result<()> {
     }
     display::blank();
 
-    let enabled = Confirm::new()
-        .with_prompt(format!(
-            "{} Enable global system prompt?",
-            style("?").blue().bold()
-        ))
+    let enabled = Confirm::with_theme(theme)
+        .with_prompt("Enable global system prompt?")
         .default(prompt.enabled.unwrap_or(false))
         .interact()?;
 
     if enabled {
-        let content: String = Input::new()
-            .with_prompt(format!(
-                "{} System prompt text",
-                style("?").blue().bold()
-            ))
+        let content: String = Input::with_theme(theme)
+            .with_prompt("System prompt text")
             .default(prompt.content.unwrap_or_default())
             .interact_text()?;
 
@@ -821,7 +1107,7 @@ fn settings_system_prompt(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_logging(store: &Arc<ConfigStore>) -> Result<()> {
+fn settings_logging(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut config = store.load_config();
     let logging = config.logging.clone().unwrap_or_default();
     display::section("Logging");
@@ -838,18 +1124,15 @@ fn settings_logging(store: &Arc<ConfigStore>) -> Result<()> {
         .position(|&l| l == logging.level.as_deref().unwrap_or("info"))
         .unwrap_or(3);
 
-    let sel = Select::new()
-        .with_prompt(format!("{} Log level", style("?").blue().bold()))
+    let sel = Select::with_theme(theme)
+        .with_prompt("Log level")
         .items(&levels)
         .default(current_idx)
         .interact_opt()?;
 
     if let Some(idx) = sel {
-        let log_file: String = Input::new()
-            .with_prompt(format!(
-                "{} Log file path (empty for stdout)",
-                style("?").blue().bold()
-            ))
+        let log_file: String = Input::with_theme(theme)
+            .with_prompt("Log file path (empty for stdout)")
             .default(logging.log_file.unwrap_or_default())
             .allow_empty(true)
             .interact_text()?;
@@ -869,7 +1152,7 @@ fn settings_logging(store: &Arc<ConfigStore>) -> Result<()> {
     Ok(())
 }
 
-fn settings_telemetry(store: &Arc<ConfigStore>) -> Result<()> {
+fn settings_telemetry(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Result<()> {
     let mut config = store.load_config();
     let telemetry = config.telemetry.clone().unwrap_or_default();
     display::section("Telemetry");
@@ -890,11 +1173,8 @@ fn settings_telemetry(store: &Arc<ConfigStore>) -> Result<()> {
     );
     display::blank();
 
-    let enabled = Confirm::new()
-        .with_prompt(format!(
-            "{} Enable telemetry?",
-            style("?").blue().bold()
-        ))
+    let enabled = Confirm::with_theme(theme)
+        .with_prompt("Enable telemetry?")
         .default(telemetry.enabled.unwrap_or(true))
         .interact()?;
 

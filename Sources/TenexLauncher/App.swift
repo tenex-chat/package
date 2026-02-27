@@ -1,13 +1,9 @@
-import ServiceManagement
 import SwiftUI
 
 @main
 struct TenexLauncherApp: App {
-    @StateObject private var daemon = DaemonManager()
-    @StateObject private var configStore = ConfigStore()
+    @StateObject private var orchestrator = OrchestratorManager()
     @State private var coreManager = TenexCoreManager()
-    @StateObject private var relayManager = RelayManager()
-    @StateObject private var ngrokManager = NgrokManager()
     @StateObject private var negentropySync = NegentropySync()
     @StateObject private var pendingEventsQueue = PendingEventsQueue()
     @NSApplicationDelegateAdaptor private var appDelegate: DockVisibilityDelegate
@@ -20,14 +16,12 @@ struct TenexLauncherApp: App {
     var body: some Scene {
         MenuBarExtra {
             MenuBarView(
-                daemon: daemon,
-                configStore: configStore,
-                relayManager: relayManager,
-                ngrokManager: ngrokManager,
-                negentropySync: negentropySync
+                orchestrator: orchestrator,
+                negentropySync: negentropySync,
+                pendingEventsQueue: pendingEventsQueue
             )
         } label: {
-            let nsImage = MenuBarIcon.create(running: daemon.status == .running)
+            let nsImage = MenuBarIcon.create(running: orchestrator.daemonStatus == .running)
             Image(nsImage: nsImage)
         }
         .menuBarExtraStyle(.menu)
@@ -35,16 +29,13 @@ struct TenexLauncherApp: App {
         // Settings / daemon management window
         Window("TENEX Settings", id: "settings") {
             MainWindow(
-                daemon: daemon,
-                configStore: configStore,
+                orchestrator: orchestrator,
                 coreManager: coreManager,
-                relayManager: relayManager,
-                ngrokManager: ngrokManager,
                 negentropySync: negentropySync,
                 pendingEventsQueue: pendingEventsQueue
             )
             .frame(minWidth: 700, minHeight: 500)
-            .onChange(of: configStore.needsOnboarding) { _, needsOnboarding in
+            .onChange(of: orchestrator.needsOnboarding) { _, needsOnboarding in
                 if !needsOnboarding {
                     startAllServices()
                 }
@@ -89,14 +80,7 @@ struct TenexLauncherApp: App {
             .frame(minWidth: 800, minHeight: 600)
             .onChange(of: coreManager.isInitialized) { _, isInitialized in
                 if isInitialized {
-                    // Start local relay if enabled and auto-start is on
-                    startLocalRelayIfNeeded()
                     attemptAutoLogin()
-                }
-            }
-            .onChange(of: configStore.needsOnboarding) { _, needsOnboarding in
-                if !needsOnboarding {
-                    startAllServices()
                 }
             }
             .onChange(of: isLoggedIn) { _, loggedIn in
@@ -112,13 +96,11 @@ struct TenexLauncherApp: App {
     }
 
     private func startAllServices() {
-        daemon.start()
-        startLocalRelayIfNeeded()
+        orchestrator.startAllServices(
+            negentropySync: negentropySync,
+            pendingEventsQueue: pendingEventsQueue
+        )
         attemptAutoLogin()
-
-        if configStore.config.launchAtLogin == true {
-            try? SMAppService.mainApp.register()
-        }
     }
 
     private func attemptAutoLogin() {
@@ -143,42 +125,6 @@ struct TenexLauncherApp: App {
                 case .transientError(let error):
                     print("[TENEX] Auto-login transient error: \(error)")
                     autoLoginError = "Could not auto-login: \(error)"
-                }
-            }
-        }
-    }
-
-    private func startLocalRelayIfNeeded() {
-        guard let localRelay = configStore.config.localRelay,
-              localRelay.enabled == true,
-              localRelay.autoStart != false else {
-            return
-        }
-
-        Task { @MainActor in
-            let port = localRelay.port ?? 7777
-
-            relayManager.configure(
-                port: port,
-                syncRelays: localRelay.syncRelays ?? ["wss://tenex.chat"]
-            )
-            await relayManager.start()
-
-            // If relay started successfully, start sync status polling and drain pending events
-            if relayManager.status == .running {
-                negentropySync.configure(
-                    localRelayURL: relayManager.localRelayURL,
-                    relayManager: relayManager
-                )
-                negentropySync.start()
-
-                // Drain any pending events (waits for queue to load first)
-                _ = await pendingEventsQueue.drainWhenReady(relayURL: relayManager.localRelayURL)
-
-                // Start ngrok tunnel if enabled
-                if localRelay.ngrokEnabled == true {
-                    ngrokManager.configure(port: port)
-                    await ngrokManager.start()
                 }
             }
         }

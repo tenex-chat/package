@@ -66,6 +66,20 @@ pub trait ProcessManager: Send + Sync {
 pub const MAX_LOG_LINES: usize = 200;
 pub const GRACEFUL_SHUTDOWN_SECS: u64 = 5;
 
+/// Detect the TENEX repository root by walking up from the current directory.
+/// Looks for `deps/backend/src/index.ts` as a marker file.
+pub fn detect_repo_root() -> Option<std::path::PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        if dir.join("deps/backend/src/index.ts").exists() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
 // =============================================================================
 // Shared helpers used by daemon, relay, and ngrok managers
 // =============================================================================

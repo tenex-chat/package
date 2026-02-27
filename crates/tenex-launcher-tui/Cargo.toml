@@ -15,5 +15,5 @@ indicatif.workspace = true
 futures.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-getrandom.workspace = true
 dirs.workspace = true
+nostr-sdk.workspace = true

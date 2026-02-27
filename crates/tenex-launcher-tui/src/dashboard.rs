@@ -11,6 +11,7 @@ use tenex_orchestrator::process::relay::RelayManager;
 use tenex_orchestrator::process::{ProcessManager, ProcessStatus};
 
 use crate::display;
+use crate::onboarding;
 use crate::settings;
 
 pub async fn run(
@@ -26,6 +27,7 @@ pub async fn run(
         let choices = vec![
             "Check status",
             "Start/stop services",
+            "Mobile pairing",
             "Settings",
             "Quit",
         ];
@@ -38,8 +40,9 @@ pub async fn run(
         match selection {
             Some(0) => continue,
             Some(1) => handle_services(&theme, daemon, relay, ngrok).await?,
-            Some(2) => settings::run(config_store).await?,
-            Some(3) | None => break,
+            Some(2) => { onboarding::show_mobile_pairing(config_store)?; },
+            Some(3) => settings::run(config_store).await?,
+            Some(4) | None => break,
             _ => continue,
         }
     }

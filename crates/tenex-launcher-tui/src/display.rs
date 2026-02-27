@@ -206,6 +206,47 @@ pub fn dashboard_greeting() {
     println!();
 }
 
+/// Render a QR code as Unicode half-block characters in the terminal.
+pub fn qr_code(data: &str) {
+    use qrcode::QrCode;
+
+    let code = match QrCode::new(data) {
+        Ok(c) => c,
+        Err(e) => {
+            context(&format!("Failed to generate QR code: {}", e));
+            return;
+        }
+    };
+
+    let matrix = code.to_colors();
+    let width = code.width();
+    let rows: Vec<&[qrcode::Color]> = matrix.chunks(width).collect();
+
+    let quiet = "  ";
+
+    let mut y = 0;
+    while y < rows.len() {
+        print!("{}", quiet);
+        for x in 0..width {
+            let top = rows[y][x] == qrcode::Color::Dark;
+            let bottom = if y + 1 < rows.len() {
+                rows[y + 1][x] == qrcode::Color::Dark
+            } else {
+                false
+            };
+
+            match (top, bottom) {
+                (true, true) => print!("\u{2588}"),
+                (true, false) => print!("\u{2580}"),
+                (false, true) => print!("\u{2584}"),
+                (false, false) => print!(" "),
+            }
+        }
+        println!();
+        y += 2;
+    }
+}
+
 /// Mask an API key for display: sk-ant-•••••7f2
 pub fn mask_key(key: &str) -> String {
     if key.len() <= 8 {

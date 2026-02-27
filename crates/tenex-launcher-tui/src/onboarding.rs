@@ -23,6 +23,74 @@ use crate::nostr::{self, FetchResults};
 /// Maximum items to show in a MultiSelect list before truncating.
 const MAX_LIST_ITEMS: usize = 30;
 
+/// Display the mobile pairing QR code.
+/// Reads nsec from config, constructs the pairing URL, and renders the QR code.
+/// Returns Ok(true) if QR was shown, Ok(false) if data was insufficient.
+pub fn show_mobile_pairing(config_store: &Arc<ConfigStore>) -> Result<bool> {
+    use nostr_sdk::ToBech32;
+
+    let config = config_store.load_config();
+    let launcher = config_store.load_launcher();
+
+    let privkey_hex = match &config.tenex_private_key {
+        Some(hex) => hex,
+        None => {
+            display::context("No identity configured — can't generate pairing code.");
+            return Ok(false);
+        }
+    };
+    let keys = nostr_sdk::Keys::parse(privkey_hex)
+        .map_err(|e| anyhow::anyhow!("Invalid private key: {}", e))?;
+    let nsec = keys.secret_key().to_bech32().expect("bech32 encoding");
+
+    let relay = config
+        .relays
+        .as_ref()
+        .and_then(|r| r.first())
+        .cloned()
+        .unwrap_or_default();
+
+    if relay.is_empty() {
+        display::context("No relay configured — can't generate pairing code.");
+        return Ok(false);
+    }
+
+    let is_loopback = relay.contains("localhost") || relay.contains("127.0.0.1") || relay.contains("::1");
+    let ngrok_url = launcher
+        .local_relay
+        .as_ref()
+        .and_then(|lr| lr.ngrok_url.clone());
+
+    let pairing_relay = if is_loopback {
+        if let Some(url) = ngrok_url {
+            url
+        } else {
+            display::context("Your relay is on localhost — mobile devices can't reach it.");
+            display::hint("Enable ngrok in Settings > Local Relay to make it accessible.");
+            return Ok(false);
+        }
+    } else {
+        relay
+    };
+
+    let backend = launcher.tenex_public_key.as_deref().unwrap_or("");
+
+    let mut url = format!("https://tenex.chat/signin?nsec={}", nsec);
+    url.push_str(&format!("&relay={}", pairing_relay));
+    if !backend.is_empty() {
+        url.push_str(&format!("&backend={}", backend));
+    }
+
+    display::blank();
+    display::qr_code(&url);
+    display::blank();
+    display::context("Scan this QR code with the TENEX mobile app to pair.");
+    display::context("\u{26a0} This QR code contains your private key. Do not share it.");
+    display::blank();
+
+    Ok(true)
+}
+
 /// Format an Ollama model for display in a list: name + params + quant + size.
 fn ollama_model_label(m: &provider::OllamaModel) -> String {
     let name = format!("{:<32}", m.name);
@@ -81,7 +149,7 @@ pub async fn run(config_store: &Arc<ConfigStore>) -> Result<()> {
     let mut providers = config_store.load_providers();
     let mut launcher = config_store.load_launcher();
 
-    let total_steps = if has_openclaw { 9 } else { 8 };
+    let total_steps = if has_openclaw { 10 } else { 9 };
     let mut current_step = 1;
 
     step_identity(&mut config, config_store, current_step, total_steps)?;
@@ -176,6 +244,10 @@ pub async fn run(config_store: &Arc<ConfigStore>) -> Result<()> {
         current_step,
         total_steps,
     )?;
+    sm.next();
+    current_step += 1;
+
+    step_mobile_pairing(config_store, current_step, total_steps)?;
     sm.next();
 
     step_done(&config, &providers, &launcher)?;
@@ -1463,6 +1535,30 @@ fn step_nudges_skills(
 
     store.save_launcher(launcher)?;
     display::blank();
+
+    Ok(())
+}
+
+fn step_mobile_pairing(
+    config_store: &Arc<ConfigStore>,
+    step: usize,
+    total: usize,
+) -> Result<()> {
+    display::step(step, total, "Mobile Pairing");
+
+    display::stream_context(
+        "Pair the TENEX mobile app by scanning a QR code.",
+    );
+
+    let shown = show_mobile_pairing(config_store)?;
+
+    if shown {
+        let theme = display::theme();
+        let _ = Confirm::with_theme(&theme)
+            .with_prompt("Continue?")
+            .default(true)
+            .interact()?;
+    }
 
     Ok(())
 }

@@ -13,6 +13,7 @@ pub enum OnboardingStep {
     FirstProject,
     HireAgents,
     NudgesSkills,
+    MobilePairing,
     Done,
 }
 
@@ -53,7 +54,8 @@ impl OnboardingStateMachine {
             OnboardingStep::LLMs => OnboardingStep::FirstProject,
             OnboardingStep::FirstProject => OnboardingStep::HireAgents,
             OnboardingStep::HireAgents => OnboardingStep::NudgesSkills,
-            OnboardingStep::NudgesSkills => OnboardingStep::Done,
+            OnboardingStep::NudgesSkills => OnboardingStep::MobilePairing,
+            OnboardingStep::MobilePairing => OnboardingStep::Done,
             OnboardingStep::Done => OnboardingStep::Done, // terminal
         };
     }
@@ -75,7 +77,8 @@ impl OnboardingStateMachine {
             OnboardingStep::FirstProject => OnboardingStep::LLMs,
             OnboardingStep::HireAgents => OnboardingStep::FirstProject,
             OnboardingStep::NudgesSkills => OnboardingStep::HireAgents,
-            OnboardingStep::Done => OnboardingStep::NudgesSkills,
+            OnboardingStep::MobilePairing => OnboardingStep::NudgesSkills,
+            OnboardingStep::Done => OnboardingStep::MobilePairing,
         };
     }
 
@@ -198,6 +201,7 @@ pub fn build_relay_config(
                 sync_relays: Some(vec!["wss://tenex.chat".into()]),
                 ngrok_enabled: Some(ngrok_enabled),
                 ngrok_url: None,
+                nip42_auth: Some(true),
             });
         }
     }
@@ -229,6 +233,9 @@ mod tests {
 
         sm.next();
         assert_eq!(sm.step, OnboardingStep::NudgesSkills);
+
+        sm.next();
+        assert_eq!(sm.step, OnboardingStep::MobilePairing);
 
         sm.next();
         assert_eq!(sm.step, OnboardingStep::Done);
@@ -282,6 +289,9 @@ mod tests {
 
         sm.next();
         assert_eq!(sm.step, OnboardingStep::NudgesSkills);
+
+        sm.next();
+        assert_eq!(sm.step, OnboardingStep::MobilePairing);
 
         sm.next();
         assert_eq!(sm.step, OnboardingStep::Done);

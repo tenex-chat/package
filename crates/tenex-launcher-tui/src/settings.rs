@@ -892,6 +892,7 @@ fn settings_local_relay(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Resu
     display::section("Local Relay");
     println!("  Enabled: {}", lr.enabled.unwrap_or(false));
     println!("  Port: {}", lr.port.unwrap_or(7777));
+    println!("  NIP-42 Auth: {}", lr.nip42_auth.unwrap_or(true));
     println!("  Ngrok: {}", lr.ngrok_enabled.unwrap_or(false));
     display::blank();
 
@@ -906,6 +907,11 @@ fn settings_local_relay(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Resu
             .default(lr.port.unwrap_or(7777))
             .interact_text()?;
 
+        let nip42 = Confirm::with_theme(theme)
+            .with_prompt("Enable NIP-42 authentication?")
+            .default(lr.nip42_auth.unwrap_or(true))
+            .interact()?;
+
         let ngrok = Confirm::with_theme(theme)
             .with_prompt("Enable ngrok tunnel?")
             .default(lr.ngrok_enabled.unwrap_or(false))
@@ -915,6 +921,7 @@ fn settings_local_relay(store: &Arc<ConfigStore>, theme: &ColorfulTheme) -> Resu
             enabled: Some(true),
             auto_start: Some(true),
             port: Some(port),
+            nip42_auth: Some(nip42),
             ngrok_enabled: Some(ngrok),
             ..lr
         });

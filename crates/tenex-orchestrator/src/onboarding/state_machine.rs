@@ -10,8 +10,7 @@ pub enum OnboardingStep {
     Relay,
     Providers,
     LLMs,
-    FirstProject,
-    HireAgents,
+    ProjectAndAgents,
     NudgesSkills,
     MobilePairing,
     Done,
@@ -51,9 +50,8 @@ impl OnboardingStateMachine {
             OnboardingStep::OpenClawImport => OnboardingStep::Relay,
             OnboardingStep::Relay => OnboardingStep::Providers,
             OnboardingStep::Providers => OnboardingStep::LLMs,
-            OnboardingStep::LLMs => OnboardingStep::FirstProject,
-            OnboardingStep::FirstProject => OnboardingStep::HireAgents,
-            OnboardingStep::HireAgents => OnboardingStep::NudgesSkills,
+            OnboardingStep::LLMs => OnboardingStep::ProjectAndAgents,
+            OnboardingStep::ProjectAndAgents => OnboardingStep::NudgesSkills,
             OnboardingStep::NudgesSkills => OnboardingStep::MobilePairing,
             OnboardingStep::MobilePairing => OnboardingStep::Done,
             OnboardingStep::Done => OnboardingStep::Done, // terminal
@@ -74,9 +72,8 @@ impl OnboardingStateMachine {
             }
             OnboardingStep::Providers => OnboardingStep::Relay,
             OnboardingStep::LLMs => OnboardingStep::Providers,
-            OnboardingStep::FirstProject => OnboardingStep::LLMs,
-            OnboardingStep::HireAgents => OnboardingStep::FirstProject,
-            OnboardingStep::NudgesSkills => OnboardingStep::HireAgents,
+            OnboardingStep::ProjectAndAgents => OnboardingStep::LLMs,
+            OnboardingStep::NudgesSkills => OnboardingStep::ProjectAndAgents,
             OnboardingStep::MobilePairing => OnboardingStep::NudgesSkills,
             OnboardingStep::Done => OnboardingStep::MobilePairing,
         };
@@ -96,11 +93,15 @@ pub fn needs_onboarding(store: &ConfigStore) -> bool {
 /// Seed default LLM configurations based on connected providers.
 /// Returns true if any configurations were added.
 pub fn seed_default_llms(llms: &mut TenexLLMs, providers: &TenexProviders) -> bool {
-    if !llms.configurations.is_empty() {
+    let connected: std::collections::HashSet<&String> = providers.providers.keys().collect();
+
+    // Skip seeding if Standard configs for connected providers already exist
+    let has_standard_for_connected = llms.configurations.values().any(|cfg| {
+        matches!(cfg, LLMConfiguration::Standard(s) if connected.contains(&s.provider))
+    });
+    if has_standard_for_connected {
         return false;
     }
-
-    let connected: std::collections::HashSet<&String> = providers.providers.keys().collect();
 
     // Prefer claude-code (local CLI), fall back to anthropic API key
     let anthropic_provider = if connected.contains(&"claude-code".to_string()) {
@@ -226,10 +227,7 @@ mod tests {
         assert_eq!(sm.step, OnboardingStep::LLMs);
 
         sm.next();
-        assert_eq!(sm.step, OnboardingStep::FirstProject);
-
-        sm.next();
-        assert_eq!(sm.step, OnboardingStep::HireAgents);
+        assert_eq!(sm.step, OnboardingStep::ProjectAndAgents);
 
         sm.next();
         assert_eq!(sm.step, OnboardingStep::NudgesSkills);
@@ -282,10 +280,7 @@ mod tests {
         assert_eq!(sm.step, OnboardingStep::LLMs);
 
         sm.next();
-        assert_eq!(sm.step, OnboardingStep::FirstProject);
-
-        sm.next();
-        assert_eq!(sm.step, OnboardingStep::HireAgents);
+        assert_eq!(sm.step, OnboardingStep::ProjectAndAgents);
 
         sm.next();
         assert_eq!(sm.step, OnboardingStep::NudgesSkills);
@@ -352,11 +347,11 @@ mod tests {
     }
 
     #[test]
-    fn seed_skips_if_not_empty() {
+    fn seed_skips_if_connected_provider_configured() {
         let mut llms = TenexLLMs {
             configurations: HashMap::from([(
                 "Existing".into(),
-                LLMConfiguration::Standard(StandardLLM::new("test", "test-model")),
+                LLMConfiguration::Standard(StandardLLM::new("anthropic", "test-model")),
             )]),
             ..Default::default()
         };

@@ -102,13 +102,13 @@ struct MobileSetupView: View {
 
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.amber)
                 Text("This QR code contains your private key. Do not share it.")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.amber)
             }
             .padding(12)
-            .background(RoundedRectangle(cornerRadius: 8).fill(.orange.opacity(0.1)))
+            .background(RoundedRectangle(cornerRadius: 8).fill(.amber.opacity(0.1)))
         } else if localRelayConfigured {
             localRelayUnavailableState
         } else {

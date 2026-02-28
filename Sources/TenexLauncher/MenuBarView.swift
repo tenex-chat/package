@@ -200,10 +200,10 @@ struct QRCodePanelView: View {
 
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.amber)
                 Text("Contains your private key")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.amber)
             }
 
             Button("Copy Relay URL") {

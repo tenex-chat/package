@@ -9,7 +9,6 @@ struct OnboardingView: View {
 
     enum OnboardingStep {
         case identity
-        case openclawImport
         case relay
         case providers
         case llms
@@ -44,6 +43,7 @@ struct OnboardingView: View {
 
     // OpenClaw import state
     @State private var openClawDetected: OpenClawDetected? = nil
+    @State private var openClawImported = false
 
     // Relay state
     @State private var relayMode: RelayMode = .remote
@@ -78,14 +78,10 @@ struct OnboardingView: View {
                 switch step {
                 case .identity:
                     identityStepView
-                case .openclawImport:
-                    if let detected = openClawDetected {
-                        OpenClawImportView(detected: detected)
-                    }
                 case .relay:
                     relayStepView
                 case .providers:
-                    ProvidersView(orchestrator: orchestrator)
+                    providersStepView
                 case .llms:
                     LLMsView(orchestrator: orchestrator)
                 case .mobileSetup:
@@ -113,8 +109,7 @@ struct OnboardingView: View {
                         case .mobileSetup: step = .llms
                         case .llms: step = .providers
                         case .providers: step = .relay
-                        case .relay: step = openClawDetected != nil ? .openclawImport : .identity
-                        case .openclawImport: step = .identity
+                        case .relay: step = .identity
                         }
                     }
                 }
@@ -125,7 +120,7 @@ struct OnboardingView: View {
                 case .identity:
                     if identityCompleted {
                         Button("Continue") {
-                            step = openClawDetected != nil ? .openclawImport : .relay
+                            step = .relay
                         }
                         .keyboardShortcut(.defaultAction)
                     } else if identityPath == .create {
@@ -141,17 +136,6 @@ struct OnboardingView: View {
                         .keyboardShortcut(.defaultAction)
                         .disabled(nsecInput.isEmpty || isProcessing)
                     }
-                case .openclawImport:
-                    Button("Skip") {
-                        step = .relay
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button("Import & Continue") {
-                        applyOpenClawImport()
-                        step = .relay
-                    }
-                    .keyboardShortcut(.defaultAction)
                 case .relay:
                     Button("Continue") {
                         saveRelayConfig()
@@ -208,8 +192,6 @@ struct OnboardingView: View {
         switch step {
         case .identity:
             "Set up your Nostr identity to get started."
-        case .openclawImport:
-            "Import your existing OpenClaw configuration."
         case .relay:
             "Choose how to connect to the Nostr network."
         case .providers:
@@ -387,7 +369,7 @@ struct OnboardingView: View {
 
                 Text("Save this key — you'll need it to log in on other devices. It cannot be recovered.")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.amber)
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -434,6 +416,42 @@ struct OnboardingView: View {
                     set: { orchestrator.config.whitelistedPubkeys = $0.isEmpty ? nil : $0 }
                 ))
             }
+        }
+    }
+
+    // MARK: - Providers Step
+
+    private var providersStepView: some View {
+        VStack(spacing: 0) {
+            if let detected = openClawDetected, !openClawImported {
+                HStack(spacing: 12) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.accentColor)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("OpenClaw configuration found")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Import \(detected.credentials.count) provider credential\(detected.credentials.count == 1 ? "" : "s") from OpenClaw")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Import") {
+                        applyOpenClawImport()
+                        openClawImported = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+                .padding(12)
+                .background(Color.accentColor.opacity(0.08))
+                .overlay(Rectangle().frame(height: 1).foregroundStyle(Color.accentColor.opacity(0.15)), alignment: .bottom)
+            }
+
+            ProvidersView(orchestrator: orchestrator)
         }
     }
 
@@ -707,10 +725,10 @@ struct OnboardingView: View {
 
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.amber)
                     Text("This QR code contains your private key. Do not share it.")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.amber)
                 }
             } else {
                 VStack(spacing: 12) {

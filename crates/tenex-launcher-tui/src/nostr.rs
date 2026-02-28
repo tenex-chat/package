@@ -2,58 +2,31 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use nostr_sdk::{Client, Filter, Kind, RelayStatus, TagKind};
-
-pub struct FetchedTeam {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    /// Event IDs of the agents in this team.
-    pub agent_event_ids: Vec<String>,
-}
-
-pub struct FetchedAgent {
-    pub id: String,
-    pub name: String,
-    pub role: String,
-    pub description: String,
-    /// Raw serialized Nostr event JSON — used for piping to `tenex agent add` via stdin.
-    pub raw_json: String,
-}
+use nostr_sdk::{Client, Filter, Keys, Kind, RelayStatus, TagKind};
 
 pub struct FetchedNudge {
     pub id: String,
+    pub pubkey: String,
+    pub d_tag: String,
+    pub created_at: u64,
     pub title: String,
     pub description: String,
 }
 
 pub struct FetchedSkill {
     pub id: String,
+    pub pubkey: String,
+    pub d_tag: String,
+    pub created_at: u64,
     pub title: String,
     pub description: String,
 }
 
 pub struct FetchResults {
-    pub teams: Vec<FetchedTeam>,
-    pub agents: Vec<FetchedAgent>,
     pub nudges: Vec<FetchedNudge>,
     pub skills: Vec<FetchedSkill>,
 }
 
-impl FetchResults {
-    /// Resolve a team's agent references to actual FetchedAgent entries.
-    pub fn agents_for_team(&self, team: &FetchedTeam) -> Vec<&FetchedAgent> {
-        let agent_index: HashMap<&str, &FetchedAgent> =
-            self.agents.iter().map(|a| (a.id.as_str(), a)).collect();
-        team.agent_event_ids
-            .iter()
-            .filter_map(|eid| agent_index.get(eid.as_str()).copied())
-            .collect()
-    }
-}
-
-const TEAM_KIND: u16 = 34199;
-const AGENT_KIND: u16 = 4199;
 const NUDGE_KIND: u16 = 4201;
 const SKILL_KIND: u16 = 4202;
 
@@ -64,18 +37,13 @@ fn tag_value(event: &nostr_sdk::Event, kind: TagKind) -> Option<String> {
         .and_then(|tag| tag.content().map(|s| s.to_string()))
 }
 
-/// Collect all `e` tag values from an event (agent references in a team).
-fn e_tag_values(event: &nostr_sdk::Event) -> Vec<String> {
-    event
-        .tags
-        .iter()
-        .filter(|t| t.kind() == TagKind::SingleLetter(nostr_sdk::SingleLetterTag::lowercase(nostr_sdk::Alphabet::E)))
-        .filter_map(|t| t.content().map(|s| s.to_string()))
-        .collect()
-}
-
-pub async fn fetch_from_relays(relay_urls: &[String]) -> Result<FetchResults> {
-    let client = Client::default();
+/// Create a nostr client and connect to the given relays.
+/// The caller is responsible for calling `client.disconnect().await` when done.
+pub async fn connect(relay_urls: &[String], keys: Option<Keys>) -> Result<Client> {
+    let client = match keys {
+        Some(k) => Client::builder().signer(k).build(),
+        None => Client::default(),
+    };
 
     for url in relay_urls {
         client.add_relay(url.as_str()).await?;
@@ -99,9 +67,11 @@ pub async fn fetch_from_relays(relay_urls: &[String]) -> Result<FetchResults> {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
+    Ok(client)
+}
+
+pub async fn fetch_events(client: &Client) -> Result<FetchResults> {
     let filter = Filter::new().kinds([
-        Kind::from(TEAM_KIND),
-        Kind::from(AGENT_KIND),
         Kind::from(NUDGE_KIND),
         Kind::from(SKILL_KIND),
     ]);
@@ -110,8 +80,6 @@ pub async fn fetch_from_relays(relay_urls: &[String]) -> Result<FetchResults> {
         .fetch_events(filter, Duration::from_secs(10))
         .await?;
 
-    let mut teams = Vec::new();
-    let mut agents = Vec::new();
     let mut nudges = Vec::new();
     let mut skills = Vec::new();
 
@@ -120,49 +88,26 @@ pub async fn fetch_from_relays(relay_urls: &[String]) -> Result<FetchResults> {
         let kind_u16: u16 = event.kind.into();
 
         match kind_u16 {
-            TEAM_KIND => {
-                let title = tag_value(&event, TagKind::Title).unwrap_or_default();
-                if title.is_empty() {
-                    continue;
-                }
-                let description = if event.content.is_empty() {
-                    tag_value(&event, TagKind::Description).unwrap_or_default()
-                } else {
-                    event.content.clone()
-                };
-                let agent_event_ids = e_tag_values(&event);
-                teams.push(FetchedTeam {
-                    id,
-                    title,
-                    description,
-                    agent_event_ids,
-                });
-            }
-            AGENT_KIND => {
-                let name = tag_value(&event, TagKind::Title)
-                    .unwrap_or_else(|| "Unnamed Agent".into());
-                let role = tag_value(&event, TagKind::Custom("role".into()))
-                    .unwrap_or_default();
-                let description = tag_value(&event, TagKind::Description)
-                    .unwrap_or_else(|| event.content.clone());
-                let raw_json = serde_json::to_string(&event).unwrap_or_default();
-
-                agents.push(FetchedAgent {
-                    id,
-                    name,
-                    role,
-                    description,
-                    raw_json,
-                });
-            }
             NUDGE_KIND => {
                 let title = tag_value(&event, TagKind::Title)
                     .unwrap_or_else(|| "Unnamed Nudge".into());
                 let description = tag_value(&event, TagKind::Description)
                     .unwrap_or_else(|| event.content.clone());
+                let pubkey = event.pubkey.to_hex();
+                let d_tag = tag_value(
+                    &event,
+                    TagKind::SingleLetter(nostr_sdk::SingleLetterTag::lowercase(
+                        nostr_sdk::Alphabet::D,
+                    )),
+                )
+                .unwrap_or_default();
+                let created_at = event.created_at.as_secs();
 
                 nudges.push(FetchedNudge {
                     id,
+                    pubkey,
+                    d_tag,
+                    created_at,
                     title,
                     description,
                 });
@@ -172,9 +117,21 @@ pub async fn fetch_from_relays(relay_urls: &[String]) -> Result<FetchResults> {
                     .unwrap_or_else(|| "Unnamed Skill".into());
                 let description = tag_value(&event, TagKind::Description)
                     .unwrap_or_default();
+                let pubkey = event.pubkey.to_hex();
+                let d_tag = tag_value(
+                    &event,
+                    TagKind::SingleLetter(nostr_sdk::SingleLetterTag::lowercase(
+                        nostr_sdk::Alphabet::D,
+                    )),
+                )
+                .unwrap_or_default();
+                let created_at = event.created_at.as_secs();
 
                 skills.push(FetchedSkill {
                     id,
+                    pubkey,
+                    d_tag,
+                    created_at,
                     title,
                     description,
                 });
@@ -183,12 +140,51 @@ pub async fn fetch_from_relays(relay_urls: &[String]) -> Result<FetchResults> {
         }
     }
 
-    client.disconnect().await;
+    let nudges = dedup_by_pubkey_dtag_nudges(nudges);
+    let skills = dedup_by_pubkey_dtag_skills(skills);
 
     Ok(FetchResults {
-        teams,
-        agents,
         nudges,
         skills,
     })
+}
+
+/// Keep only the latest nudge per (pubkey, d_tag). Events without a d_tag are kept as-is.
+fn dedup_by_pubkey_dtag_nudges(nudges: Vec<FetchedNudge>) -> Vec<FetchedNudge> {
+    let mut latest: HashMap<(String, String), FetchedNudge> = HashMap::new();
+    let mut no_dtag: Vec<FetchedNudge> = Vec::new();
+    for nudge in nudges {
+        if nudge.d_tag.is_empty() {
+            no_dtag.push(nudge);
+            continue;
+        }
+        let key = (nudge.pubkey.clone(), nudge.d_tag.clone());
+        let replace = latest.get(&key).map_or(true, |e| nudge.created_at > e.created_at);
+        if replace {
+            latest.insert(key, nudge);
+        }
+    }
+    let mut result: Vec<FetchedNudge> = latest.into_values().collect();
+    result.extend(no_dtag);
+    result
+}
+
+/// Keep only the latest skill per (pubkey, d_tag). Events without a d_tag are kept as-is.
+fn dedup_by_pubkey_dtag_skills(skills: Vec<FetchedSkill>) -> Vec<FetchedSkill> {
+    let mut latest: HashMap<(String, String), FetchedSkill> = HashMap::new();
+    let mut no_dtag: Vec<FetchedSkill> = Vec::new();
+    for skill in skills {
+        if skill.d_tag.is_empty() {
+            no_dtag.push(skill);
+            continue;
+        }
+        let key = (skill.pubkey.clone(), skill.d_tag.clone());
+        let replace = latest.get(&key).map_or(true, |e| skill.created_at > e.created_at);
+        if replace {
+            latest.insert(key, skill);
+        }
+    }
+    let mut result: Vec<FetchedSkill> = latest.into_values().collect();
+    result.extend(no_dtag);
+    result
 }

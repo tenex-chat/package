@@ -186,4 +186,7 @@ extension Color {
     init(uiColor: NSColor) {
         self.init(nsColor: uiColor)
     }
+
+    /// Brand amber #FFC107
+    static let amber = Color(red: 255 / 255, green: 193 / 255, blue: 7 / 255)
 }

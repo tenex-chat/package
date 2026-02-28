@@ -1,12 +1,8 @@
-use std::io::{self, Write};
-use std::thread;
-use std::time::Duration;
-
-use console::{colors_enabled, style, Style};
+use console::{style, Style};
 use dialoguer::theme::ColorfulTheme;
 
 /// Accent color for step headers and interactive prompts.
-pub const ACCENT: u8 = 222; // gold
+pub const ACCENT: u8 = 214; // amber #FFC107
 /// Secondary color for informational highlights.
 pub const INFO: u8 = 117; // sky blue
 /// Color for selected/checked items.
@@ -38,42 +34,9 @@ pub fn theme() -> ColorfulTheme {
     }
 }
 
-/// Stream text character-by-character to stdout with LLM-like timing.
-fn stream_chars(out: &mut io::StdoutLock<'_>, text: &str) {
-    for ch in text.chars() {
-        write!(out, "{}", ch).ok();
-        out.flush().ok();
-
-        let delay = match ch {
-            '.' | '!' | '?' | '—' => 60,
-            ',' | ';' | ':' => 35,
-            ' ' => 6,
-            '\n' => 30,
-            _ => 18,
-        };
-        thread::sleep(Duration::from_millis(delay));
-    }
-}
-
-/// Stream dim context text line-by-line with LLM-like animation.
-/// Use this for onboarding explanatory paragraphs.
+/// Print dim context/explanation text (alias for `context`).
 pub fn stream_context(text: &str) {
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    let use_ansi = colors_enabled();
-
-    for line in text.lines() {
-        write!(out, "  ").ok();
-        if use_ansi {
-            write!(out, "\x1b[2m").ok();
-        }
-        stream_chars(&mut out, line);
-        if use_ansi {
-            write!(out, "\x1b[0m").ok();
-        }
-        writeln!(out).ok();
-        out.flush().ok();
-    }
+    context(text);
 }
 
 /// Print an onboarding step header with step number and color.
@@ -137,17 +100,6 @@ pub fn service_status(name: &str, running: bool, detail: &str) {
     println!(
         "    {:<10}{} {:<12}{}",
         name, indicator, status_text, style(detail).dim()
-    );
-}
-
-/// Print a config item: ● name   value (provider)
-pub fn config_item(name: &str, value: &str, detail: &str) {
-    println!(
-        "    {} {:<12}{} {}",
-        style("●").color256(INFO),
-        style(name).bold(),
-        value,
-        style(format!("({})", detail)).dim()
     );
 }
 
@@ -245,6 +197,27 @@ pub fn qr_code(data: &str) {
         println!();
         y += 2;
     }
+}
+
+/// Truncate a string to fit the terminal width minus a left margin.
+/// `margin` is the number of columns reserved for prefixes (checkbox, indent, etc.).
+pub fn truncate_to_terminal(text: &str, margin: usize) -> String {
+    let term_width = console::Term::stdout().size().1 as usize;
+    let max = term_width.saturating_sub(margin);
+    if max == 0 {
+        return String::new();
+    }
+    // Strip ANSI so we can measure/truncate on visible characters only.
+    let stripped = console::strip_ansi_codes(text);
+    if stripped.len() <= max {
+        return text.to_string();
+    }
+    // Truncate the plain-text version and add an ellipsis.
+    let mut end = max.saturating_sub(1);
+    while end > 0 && !stripped.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &stripped[..end])
 }
 
 /// Mask an API key for display: sk-ant-•••••7f2

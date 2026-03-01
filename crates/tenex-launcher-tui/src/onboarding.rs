@@ -205,8 +205,6 @@ async fn await_backend_install(handle: Option<tokio::task::JoinHandle<Result<()>
 }
 
 pub async fn run(config_store: &Arc<ConfigStore>, backend_override: Option<&str>) -> Result<ClientChoice> {
-    display::welcome();
-
     // 1. Ensure bun is available and kick off background backend install
     let backend_handle = if backend_override.is_some() {
         None

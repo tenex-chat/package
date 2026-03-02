@@ -51,11 +51,11 @@ clean:
 
 # Development: build and run locally
 run: deps
-	go run . -config ~/.tenex/relay.json
+	go run . -config ~/.tenex/relay/relay.json
 
 # Generate default config
 gen-config:
-	go run . -gen-config -config ~/.tenex/relay.json
+	go run . -gen-config -config ~/.tenex/relay/relay.json
 
 # Show version
 version:

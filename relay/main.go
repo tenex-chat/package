@@ -18,14 +18,15 @@ var (
 
 func defaultConfigPath() string {
 	if base := os.Getenv("TENEX_BASE_DIR"); base != "" {
-		return filepath.Join(base, "relay.json")
+		return filepath.Join(base, "relay", "relay.json")
 	}
-	return "~/.tenex/relay.json"
+	return "~/.tenex/relay/relay.json"
 }
 
 func main() {
 	// Command-line flags
 	configPath := flag.String("config", defaultConfigPath(), "Path to configuration file")
+	port := flag.Int("port", 0, "Override port from config")
 	genConfig := flag.Bool("gen-config", false, "Generate a default configuration file and exit")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 
@@ -51,6 +52,10 @@ func main() {
 	config, err := LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	if *port != 0 {
+		config.Port = *port
 	}
 
 	log.Printf("TENEX Relay %s starting...", Version)

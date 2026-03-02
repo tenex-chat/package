@@ -23,6 +23,7 @@ type Relay struct {
 	server  *http.Server
 	storage *Storage
 	syncer  *Syncer
+	acl     *ACL
 
 	mu        sync.RWMutex
 	startTime time.Time
@@ -117,15 +118,21 @@ func NewRelay(config *Config) (*Relay, error) {
 	})
 
 	// Apply default policies
+	preventLargeTags := policies.PreventLargeTags(config.Limits.MaxEventTags)
 	relay.RejectEvent = append(relay.RejectEvent,
-		policies.PreventLargeTags(config.Limits.MaxEventTags),
-		policies.RestrictToSpecifiedKinds(
-			false, // Not restrictive - allow all kinds
-		),
+		func(ctx context.Context, event *nostr.Event) (reject bool, msg string) {
+			reject, msg = preventLargeTags(ctx, event)
+			if reject {
+				logRejectedEventWrite(ctx, event, msg)
+			}
+			return reject, msg
+		},
 		// Enforce MaxContentLength
 		func(ctx context.Context, event *nostr.Event) (reject bool, msg string) {
 			if len(event.Content) > config.Limits.MaxContentLength {
-				return true, fmt.Sprintf("content too large: %d > %d bytes", len(event.Content), config.Limits.MaxContentLength)
+				msg := fmt.Sprintf("content too large: %d > %d bytes", len(event.Content), config.Limits.MaxContentLength)
+				logRejectedEventWrite(ctx, event, msg)
+				return true, msg
 			}
 			return false, ""
 		},
@@ -138,10 +145,28 @@ func NewRelay(config *Config) (*Relay, error) {
 		},
 	)
 
+	// NIP-42: require auth for subscriptions so the ACL can identify subscribers
+	relay.RejectFilter = append(relay.RejectFilter,
+		func(ctx context.Context, filter nostr.Filter) (reject bool, msg string) {
+			if khatru.GetAuthed(ctx) == "" {
+				khatru.RequestAuth(ctx)
+				return true, "auth-required: authenticate to subscribe"
+			}
+			return false, ""
+		},
+	)
+
+	// ACL: whitelist-based read access control
+	acl := NewACL(config.AdminPubkeys, storage)
+	relay.OverwriteFilter = append(relay.OverwriteFilter, acl.OverwriteFilterHook)
+	relay.PreventBroadcast = append(relay.PreventBroadcast, acl.PreventBroadcastHook)
+	relay.OnEventSaved = append(relay.OnEventSaved, acl.OnEventSavedHook)
+
 	r := &Relay{
 		config:  config,
 		khatru:  relay,
 		storage: storage,
+		acl:     acl,
 	}
 
 	return r, nil
@@ -152,6 +177,7 @@ func (r *Relay) Start(ctx context.Context) error {
 	r.mu.Lock()
 	r.startTime = time.Now()
 	r.mu.Unlock()
+	r.acl.StartWhitelistFileSync(ctx)
 
 	// Create HTTP mux
 	mux := http.NewServeMux()
@@ -192,6 +218,11 @@ func (r *Relay) Start(ctx context.Context) error {
 	// Start syncer if sync relays are configured
 	if len(r.config.Sync.Relays) > 0 {
 		r.syncer = NewSyncer(r.config.Sync, r.storage)
+		r.syncer.OnEventStored = func(event *nostr.Event) {
+			if event.Kind == 14199 {
+				r.acl.ProcessWhitelistEvent(event)
+			}
+		}
 		r.syncer.Start(ctx)
 	}
 
@@ -264,6 +295,29 @@ func (r *Relay) handleStats(w http.ResponseWriter, req *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
+}
+
+func logRejectedEventWrite(ctx context.Context, event *nostr.Event, reason string) {
+	eventID := truncateForLog(event.ID, 12)
+	pubkey := truncateForLog(event.PubKey, 12)
+	ip := khatru.GetIP(ctx)
+	if ip == "" {
+		ip = "unknown"
+	}
+	if reason == "" {
+		reason = "blocked: no reason provided"
+	}
+	log.Printf("[relay] rejected EVENT id=%s kind=%d pubkey=%s ip=%s reason=%s", eventID, event.Kind, pubkey, ip, reason)
+}
+
+func truncateForLog(value string, max int) string {
+	if value == "" {
+		return "unknown"
+	}
+	if len(value) <= max {
+		return value
+	}
+	return value[:max] + "..."
 }
 
 // WriteConfigTemplate writes a config template to the given path

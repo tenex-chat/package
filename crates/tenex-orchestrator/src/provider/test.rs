@@ -117,10 +117,9 @@ pub async fn test_provider_connection(
         }
 
         // CLI-based providers — just verify the command runs
-        "claude-code" | "gemini-cli" | "codex-app-server" => {
+        "claude-code" | "codex-app-server" => {
             let cmd = match provider {
                 "claude-code" => "claude",
-                "gemini-cli" => "gemini",
                 "codex-app-server" => "codex",
                 _ => unreachable!(),
             };

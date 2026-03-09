@@ -10,7 +10,6 @@ pub const PROVIDER_LIST_ORDER: &[&str] = &[
     "openai",
     "ollama",
     "claude-code",
-    "gemini-cli",
     "codex-app-server",
 ];
 
@@ -19,7 +18,6 @@ pub fn local_command_providers() -> HashMap<&'static str, &'static str> {
     HashMap::from([
         ("claude-code", "claude"),
         ("codex-app-server", "codex"),
-        ("gemini-cli", "gemini"),
     ])
 }
 
@@ -31,7 +29,6 @@ pub fn provider_display_names() -> HashMap<&'static str, &'static str> {
         ("openai", "OpenAI"),
         ("ollama", "Ollama"),
         ("claude-code", "Claude Code"),
-        ("gemini-cli", "Gemini CLI"),
         ("codex-app-server", "Codex App Server"),
     ])
 }
@@ -157,6 +154,7 @@ pub fn command_exists(command: &str) -> bool {
 
     std::process::Command::new(shell)
         .args([flag, &cmd_str])
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -435,7 +433,6 @@ pub fn provider_subtitle(provider: &str, connected: bool, api_key: Option<&str>,
             ),
             "claude-code" => "Connected from local `claude` command".into(),
             "codex-app-server" => "Connected from local `codex` command".into(),
-            "gemini-cli" => "Connected from local `gemini` command".into(),
             _ => "Connected".into(),
         }
     } else {
@@ -446,7 +443,6 @@ pub fn provider_subtitle(provider: &str, connected: bool, api_key: Option<&str>,
             "ollama" => "Connect to your local Ollama endpoint".into(),
             "claude-code" => "Requires local `claude` command".into(),
             "codex-app-server" => "Requires local `codex` command".into(),
-            "gemini-cli" => "Requires local `gemini` command".into(),
             _ => "Not configured".into(),
         }
     }

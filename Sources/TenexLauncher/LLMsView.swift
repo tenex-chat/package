@@ -5,6 +5,7 @@ struct LLMsView: View {
 
     @State private var showAddSheet = false
     @State private var selectedConfig: LLMConfigSelection?
+    @State private var selectedKey: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -23,10 +24,15 @@ struct LLMsView: View {
                         ForEach(Array(sortedConfigKeys.enumerated()), id: \.element) { index, key in
                             if let config = orchestrator.llms.configurations[key] {
                                 Button {
-                                    selectedConfig = LLMConfigSelection(id: key)
+                                    if selectedKey == key {
+                                        selectedConfig = LLMConfigSelection(id: key)
+                                    } else {
+                                        selectedKey = key
+                                    }
                                 } label: {
                                     LLMConfigurationRow(name: key, config: config)
                                         .padding(12)
+                                        .background(selectedKey == key ? Color.accentColor.opacity(0.1) : .clear)
                                 }
                                 .buttonStyle(.plain)
                                 if index < sortedConfigKeys.count - 1 {
@@ -41,6 +47,12 @@ struct LLMsView: View {
                         RoundedRectangle(cornerRadius: 10)
                             .stroke(.quaternary, lineWidth: 1)
                     )
+
+                    if selectedKey != nil {
+                        Text("Press [d] to remove · press Return to edit")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
             Spacer(minLength: 0)
@@ -55,6 +67,17 @@ struct LLMsView: View {
                     Label("Add LLM", systemImage: "plus")
                 }
             }
+        }
+        .onKeyPress("d") {
+            guard let key = selectedKey else { return .ignored }
+            removeConfig(key)
+            selectedKey = nil
+            return .handled
+        }
+        .onKeyPress(.return) {
+            guard let key = selectedKey else { return .ignored }
+            selectedConfig = LLMConfigSelection(id: key)
+            return .handled
         }
         .sheet(isPresented: $showAddSheet) {
             AddLLMSheet(orchestrator: orchestrator, isPresented: $showAddSheet)
@@ -423,114 +446,290 @@ struct RolePicker: View {
     }
 }
 
-// MARK: - Add Sheet
+// MARK: - Add Sheet (multi-step wizard)
 
 struct AddLLMSheet: View {
     @ObservedObject var orchestrator: OrchestratorManager
     @Binding var isPresented: Bool
 
-    @State private var name = ""
-    @State private var provider = ""
-    @State private var model = ""
+    enum WizardStep { case provider, model, label }
+
+    @State private var wizardStep: WizardStep = .provider
+    @State private var selectedProvider = ""
+    @State private var selectedModel = ""
+    @State private var customModel = ""
+    @State private var label = ""
     @State private var modelOptions: [String] = []
     @State private var isLoadingModels = false
     @State private var modelLoadError: String?
 
+    private var sortedProviders: [String] {
+        Array(orchestrator.providers.providers.keys).sorted()
+    }
+
     var body: some View {
-        VStack(spacing: 16) {
-            Text("Add LLM Configuration")
-                .font(.headline)
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text(stepTitle)
+                    .font(.headline)
+                Spacer()
+            }
+            .padding(16)
 
-            Form {
-                TextField("Name", text: $name)
+            Divider()
 
-                Picker("Provider", selection: $provider) {
-                    Text("Select...").tag("")
-                    ForEach(Array(orchestrator.providers.providers.keys).sorted(), id: \.self) { p in
-                        Text(p).tag(p)
+            // Step content
+            Group {
+                switch wizardStep {
+                case .provider:
+                    providerStep
+                case .model:
+                    modelStep
+                case .label:
+                    labelStep
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Divider()
+
+            // Navigation
+            HStack {
+                if wizardStep != .provider || sortedProviders.count > 1 {
+                    Button("Cancel") { isPresented = false }
+                        .keyboardShortcut(.cancelAction)
+                }
+
+                Spacer()
+
+                switch wizardStep {
+                case .provider:
+                    Button("Next") {
+                        Task { await loadModelsAndAdvance() }
                     }
-                }
-                .onChange(of: provider) { _, _ in
-                    Task { await reloadModelOptions() }
-                }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(selectedProvider.isEmpty)
 
-                if modelOptions.isEmpty {
-                    TextField("Model ID", text: $model)
-                        .font(.system(.body, design: .monospaced))
-                } else {
-                    Picker("Model", selection: $model) {
-                        ForEach(resolvedModelOptions, id: \.self) { option in
-                            Text(option).tag(option)
+                case .model:
+                    Button("Back") { wizardStep = .provider }
+                        .buttonStyle(.bordered)
+
+                    Button("Next") {
+                        wizardStep = .label
+                        if label.isEmpty {
+                            label = suggestedLabel(for: effectiveModel)
                         }
                     }
-                    .pickerStyle(.menu)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(effectiveModel.isEmpty)
+
+                case .label:
+                    Button("Back") { wizardStep = .model }
+                        .buttonStyle(.bordered)
+
+                    Button("Add") {
+                        let finalLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !finalLabel.isEmpty else { return }
+                        orchestrator.llms.configurations[finalLabel] = .standard(
+                            StandardLLM(provider: selectedProvider, model: effectiveModel)
+                        )
+                        orchestrator.saveLLMs()
+                        isPresented = false
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                if isLoadingModels {
+            }
+            .padding(16)
+        }
+        .frame(width: 420, height: 340)
+        .onAppear {
+            if sortedProviders.count == 1 {
+                selectedProvider = sortedProviders[0]
+                Task { await loadModelsAndAdvance() }
+            }
+        }
+    }
+
+    private var stepTitle: String {
+        switch wizardStep {
+        case .provider: return "Choose provider"
+        case .model: return "Choose model"
+        case .label: return "Name this configuration"
+        }
+    }
+
+    private var effectiveModel: String {
+        modelOptions.isEmpty ? customModel : selectedModel
+    }
+
+    // MARK: - Provider Step
+
+    private var providerStep: some View {
+        ScrollView {
+            VStack(spacing: 8) {
+                ForEach(sortedProviders, id: \.self) { provider in
+                    Button {
+                        selectedProvider = provider
+                    } label: {
+                        HStack(spacing: 12) {
+                            ProviderLogo(provider, size: 24)
+                            Text(provider)
+                                .font(.body.weight(.medium))
+                            Spacer()
+                            if selectedProvider == provider {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.accentColor)
+                            }
+                        }
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(selectedProvider == provider ? Color.accentColor.opacity(0.08) : Color(nsColor: .windowBackgroundColor))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(selectedProvider == provider ? Color.accentColor : .quaternary, lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    // MARK: - Model Step
+
+    private var modelStep: some View {
+        VStack(spacing: 0) {
+            if isLoadingModels {
+                VStack(spacing: 12) {
                     ProgressView()
-                        .controlSize(.small)
-                }
-                if let modelLoadError {
-                    Text(modelLoadError)
+                    Text("Loading models…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            }
-            .formStyle(.grouped)
-            .task {
-                await reloadModelOptions()
-            }
-
-            HStack {
-                Button("Cancel") { isPresented = false }
-                    .keyboardShortcut(.cancelAction)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if !modelOptions.isEmpty {
+                ScrollView {
+                    VStack(spacing: 6) {
+                        ForEach(modelOptions, id: \.self) { model in
+                            Button {
+                                selectedModel = model
+                            } label: {
+                                HStack {
+                                    Text(model)
+                                        .font(.system(.body, design: .monospaced))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Spacer()
+                                    if selectedModel == model {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.accentColor)
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(selectedModel == model ? Color.accentColor.opacity(0.08) : .clear)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(12)
+                }
+                .background(Color(nsColor: .windowBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary, lineWidth: 1))
+                .padding(16)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Enter the model ID manually")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    TextField("e.g. claude-sonnet-4-6", text: $customModel)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                    if let modelLoadError {
+                        Text(modelLoadError)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(16)
                 Spacer()
-                Button("Add") {
-                    orchestrator.llms.configurations[name] = .standard(
-                        StandardLLM(provider: provider, model: model)
+            }
+        }
+    }
+
+    // MARK: - Label Step
+
+    private var labelStep: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("This label identifies the configuration in role assignments.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            TextField("e.g. Sonnet, Fast, My GPT-4", text: $label)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    let finalLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !finalLabel.isEmpty else { return }
+                    orchestrator.llms.configurations[finalLabel] = .standard(
+                        StandardLLM(provider: selectedProvider, model: effectiveModel)
                     )
                     orchestrator.saveLLMs()
                     isPresented = false
                 }
-                .keyboardShortcut(.defaultAction)
-                .disabled(name.isEmpty || provider.isEmpty || model.isEmpty)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Provider: \(selectedProvider)")
+                Text("Model: \(effectiveModel)")
             }
-            .padding()
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 6).fill(.background.secondary))
         }
-        .frame(width: 400, height: 280)
+        .padding(16)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private var resolvedModelOptions: [String] {
-        if model.isEmpty || modelOptions.contains(model) {
-            return modelOptions
-        }
-        return [model] + modelOptions
-    }
+    // MARK: - Helpers
 
-    private func reloadModelOptions() async {
-        guard !provider.isEmpty else {
-            modelOptions = []
-            modelLoadError = nil
-            return
-        }
+    private func loadModelsAndAdvance() async {
+        wizardStep = .model
         isLoadingModels = true
-        defer { isLoadingModels = false }
         modelLoadError = nil
+        modelOptions = []
+        selectedModel = ""
 
         do {
             modelOptions = try await ModelCatalogService.fetchModels(
-                provider: provider,
+                provider: selectedProvider,
                 providers: orchestrator.providers.providers
             )
-            if model.isEmpty, let first = modelOptions.first {
-                model = first
+            if let first = modelOptions.first {
+                selectedModel = first
             }
         } catch let error as ModelCatalogError {
-            modelOptions = []
             modelLoadError = error.errorDescription
         } catch {
-            modelOptions = []
-            modelLoadError = "Could not load models for \(provider)."
+            modelLoadError = "Could not load models for \(selectedProvider)."
         }
+        isLoadingModels = false
+    }
+
+    private func suggestedLabel(for model: String) -> String {
+        // Strip common prefixes like "anthropic/", "openai/" etc.
+        let base = model.split(separator: "/").last.map(String.init) ?? model
+        // Capitalise the first component before "-"
+        let parts = base.split(separator: "-")
+        return parts.first.map { String($0).capitalized } ?? base
     }
 }
 

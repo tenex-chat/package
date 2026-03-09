@@ -21,8 +21,8 @@ type RelayStatus struct {
 // SyncStats holds sync statistics exposed via /stats
 type SyncStats struct {
 	mu           sync.RWMutex
-	EventsSynced int64                 `json:"events_synced"`
-	LastSyncTime *time.Time            `json:"last_sync_time,omitempty"`
+	EventsSynced int64                  `json:"events_synced"`
+	LastSyncTime *time.Time             `json:"last_sync_time,omitempty"`
 	RelayStatus  map[string]RelayStatus `json:"relay_status"`
 }
 
@@ -50,11 +50,12 @@ func (s *SyncStats) snapshot() map[string]interface{} {
 
 // Syncer manages event synchronization from remote relays
 type Syncer struct {
-	config  SyncConfig
-	storage *Storage
-	stats   SyncStats
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	config        SyncConfig
+	storage       *Storage
+	stats         SyncStats
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	OnEventStored func(*nostr.Event)
 }
 
 // NewSyncer creates a new Syncer
@@ -161,11 +162,14 @@ func (s *Syncer) runSync(ctx context.Context, url string) error {
 	}
 	defer sub.Unsub()
 
+	// Scope profile refresh workers to this connection lifecycle.
+	profileCtx, cancelProfile := context.WithCancel(ctx)
+	defer cancelProfile()
+	profileLoopStarted := false
+
 	// Track authors for profile sync after EOSE
 	var authorsMu sync.Mutex
 	authors := make(map[string]struct{})
-	var eoseDone atomic.Bool
-
 	for {
 		select {
 		case evt, ok := <-sub.Events:
@@ -184,29 +188,26 @@ func (s *Syncer) runSync(ctx context.Context, url string) error {
 			s.stats.LastSyncTime = &now
 			s.stats.mu.Unlock()
 
-			// Collect author for profile sync (before EOSE only, to avoid unbounded growth)
-			if !eoseDone.Load() {
-				authorsMu.Lock()
-				authors[evt.PubKey] = struct{}{}
-				authorsMu.Unlock()
-			}
+			// Collect author for profile sync
+			authorsMu.Lock()
+			authors[evt.PubKey] = struct{}{}
+			authorsMu.Unlock()
 
 		case <-sub.EndOfStoredEvents:
-			eoseDone.Store(true)
 			authorsMu.Lock()
 			authorList := make([]string, 0, len(authors))
 			for a := range authors {
 				authorList = append(authorList, a)
 			}
-			authors = nil // free memory
 			authorsMu.Unlock()
 
 			log.Printf("[sync] EOSE from %s, synced %d events so far, %d unique authors",
 				url, atomic.LoadInt64(&s.stats.EventsSynced), len(authorList))
 
-			// Sync profiles in background
-			if len(authorList) > 0 {
-				go s.syncProfiles(ctx, relay, authorList)
+			// Start one profile refresh loop per connection.
+			if !profileLoopStarted {
+				profileLoopStarted = true
+				go s.profileSyncLoop(profileCtx, relay, &authorsMu, &authors, authorList)
 			}
 
 		case reason := <-sub.ClosedReason:
@@ -218,38 +219,42 @@ func (s *Syncer) runSync(ctx context.Context, url string) error {
 	}
 }
 
-// syncProfiles fetches kind:0 profiles for authors we don't already have
+// profileSyncLoop runs an initial profile sync, then refreshes all known author
+// profiles periodically (every 30 minutes). It picks up new authors that arrive
+// via live events between refresh cycles.
+func (s *Syncer) profileSyncLoop(ctx context.Context, relay *nostr.Relay, authorsMu *sync.Mutex, authors *map[string]struct{}, initialAuthors []string) {
+	// Initial sync
+	s.syncProfiles(ctx, relay, initialAuthors)
+
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			authorsMu.Lock()
+			authorList := make([]string, 0, len(*authors))
+			for a := range *authors {
+				authorList = append(authorList, a)
+			}
+			authorsMu.Unlock()
+
+			if len(authorList) > 0 {
+				log.Printf("[sync] periodic profile refresh for %d authors", len(authorList))
+				s.syncProfiles(ctx, relay, authorList)
+			}
+		}
+	}
+}
+
+// syncProfiles fetches kind:0 profiles for the given authors, replacing any existing ones
 func (s *Syncer) syncProfiles(ctx context.Context, relay *nostr.Relay, authors []string) {
-	// Filter out authors we already have profiles for
-	missing := make([]string, 0, len(authors))
-	for _, author := range authors {
-		ch, err := s.storage.QueryEvents(ctx, nostr.Filter{
-			Authors: []string{author},
-			Kinds:   []int{0},
-			Limit:   1,
-		})
-		if err != nil {
-			continue
-		}
-		found := false
-		for range ch {
-			found = true
-		}
-		if !found {
-			missing = append(missing, author)
-		}
-	}
+	log.Printf("[sync] fetching profiles for %d authors", len(authors))
 
-	if len(missing) == 0 {
-		log.Printf("[sync] all %d author profiles already cached", len(authors))
-		return
-	}
-
-	log.Printf("[sync] fetching %d missing profiles (out of %d authors)", len(missing), len(authors))
-
-	// Fetch in batches of 100
 	batchSize := 100
-	for i := 0; i < len(missing); i += batchSize {
+	for i := 0; i < len(authors); i += batchSize {
 		select {
 		case <-ctx.Done():
 			return
@@ -257,10 +262,10 @@ func (s *Syncer) syncProfiles(ctx context.Context, relay *nostr.Relay, authors [
 		}
 
 		end := i + batchSize
-		if end > len(missing) {
-			end = len(missing)
+		if end > len(authors) {
+			end = len(authors)
 		}
-		batch := missing[i:end]
+		batch := authors[i:end]
 
 		events, err := relay.QuerySync(ctx, nostr.Filter{
 			Authors: batch,
@@ -283,13 +288,19 @@ func (s *Syncer) syncProfiles(ctx context.Context, relay *nostr.Relay, authors [
 
 // storeEvent handles replaceable event semantics before storing
 func (s *Syncer) storeEvent(ctx context.Context, event *nostr.Event) error {
+	var err error
 	if isReplaceable(event.Kind) {
-		return s.storeReplaceableEvent(ctx, event)
+		err = s.storeReplaceableEvent(ctx, event)
+	} else if isParameterizedReplaceable(event.Kind) {
+		err = s.storeParameterizedReplaceableEvent(ctx, event)
+	} else {
+		err = s.storage.SaveEvent(ctx, event)
 	}
-	if isParameterizedReplaceable(event.Kind) {
-		return s.storeParameterizedReplaceableEvent(ctx, event)
+
+	if err == nil && s.OnEventStored != nil {
+		s.OnEventStored(event)
 	}
-	return s.storage.SaveEvent(ctx, event)
+	return err
 }
 
 // storeReplaceableEvent handles kinds 0, 3, 10000-19999

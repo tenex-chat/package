@@ -2177,6 +2177,7 @@ dependencies = [
  "dirs",
  "futures",
  "indicatif",
+ "libc",
  "nostr-sdk",
  "qrcode",
  "serde",

@@ -136,6 +136,47 @@ pub(crate) fn find_bun() -> Option<String> {
     None
 }
 
+/// Send SIGTERM to a PID, poll until dead, then SIGKILL after timeout.
+/// Returns `true` if the process was successfully terminated.
+#[cfg(unix)]
+pub(crate) async fn graceful_shutdown_pid(pid: i32, timeout_secs: u64) -> bool {
+    // Check if the process exists first
+    let alive = unsafe { libc::kill(pid, 0) } == 0;
+    if !alive {
+        return true;
+    }
+
+    // Send SIGTERM
+    unsafe {
+        libc::kill(pid, libc::SIGTERM);
+    }
+
+    // Poll until dead or timeout
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let still_alive = unsafe { libc::kill(pid, 0) } == 0;
+        if !still_alive {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+    }
+
+    // Force kill
+    tracing::warn!("PID {} did not exit after {}s, sending SIGKILL", pid, timeout_secs);
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+
+    // Brief wait for SIGKILL to take effect
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let dead = unsafe { libc::kill(pid, 0) } != 0;
+    dead
+}
+
 /// Send SIGTERM to a child process, wait for graceful shutdown, then SIGKILL.
 pub(crate) async fn graceful_shutdown(child: &mut Child, timeout_secs: u64) {
     #[cfg(unix)]

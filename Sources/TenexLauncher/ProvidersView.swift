@@ -507,6 +507,16 @@ struct ProvidersView: View {
                         }
                     }
                     .padding(12)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        // Keep explicit button behavior for managed providers.
+                        guard !row.showManage else { return }
+                        if row.isConnected {
+                            disconnect(row.id)
+                        } else if row.showConnect && !row.buttonDisabled {
+                            connect(row.id)
+                        }
+                    }
                     if index < rows.count - 1 {
                         Divider()
                     }

@@ -121,6 +121,7 @@ impl ProcessManager for NgrokManager {
 
         let mut child = Command::new("ngrok")
             .args(["http", &port.to_string(), "--log", "stdout"])
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)

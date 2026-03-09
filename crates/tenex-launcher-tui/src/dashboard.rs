@@ -13,6 +13,7 @@ use tenex_orchestrator::process::{ProcessManager, ProcessStatus};
 use crate::display;
 use crate::onboarding;
 use crate::settings;
+use crate::ui;
 
 pub async fn run(
     config_store: &Arc<ConfigStore>,
@@ -31,15 +32,17 @@ pub async fn run(
             "Settings",
             "Quit",
         ];
-        let selection = Select::with_theme(&theme)
-            .with_prompt("What do you want to do?")
-            .items(&choices)
-            .default(0)
-            .interact_opt()?;
+        let selection = ui::prompt(|| {
+            Select::with_theme(&theme)
+                .with_prompt("What do you want to do?")
+                .items(&choices)
+                .default(0)
+                .interact_opt()
+        });
 
-        match selection {
+        match selection? {
             Some(0) => continue,
-            Some(1) => handle_services(&theme, daemon, relay, ngrok).await?,
+            Some(1) => handle_services(&theme, config_store, daemon, relay, ngrok).await?,
             Some(2) => { onboarding::show_mobile_pairing(config_store)?; },
             Some(3) => settings::run(config_store).await?,
             Some(4) | None => break,
@@ -50,6 +53,15 @@ pub async fn run(
     Ok(())
 }
 
+fn uses_local_relay(config_store: &Arc<ConfigStore>) -> bool {
+    config_store
+        .load_launcher()
+        .local_relay
+        .as_ref()
+        .and_then(|lr| lr.enabled)
+        .unwrap_or(false)
+}
+
 async fn print_status(
     config_store: &Arc<ConfigStore>,
     daemon: &Arc<DaemonManager>,
@@ -58,37 +70,37 @@ async fn print_status(
 ) {
     display::dashboard_greeting();
 
-    let config = config_store.load_config();
-    let relay_url = config
-        .relays
-        .as_ref()
-        .and_then(|r| r.first())
-        .map(|s| s.as_str())
-        .unwrap_or("not configured");
-
     let daemon_status = daemon.status().await;
-    let relay_status = relay.status().await;
-    let ngrok_status = ngrok.status().await;
-
     display::service_status(
         "daemon",
         daemon_status == ProcessStatus::Running,
         &format_process_detail(daemon_status),
     );
-    display::service_status(
-        "relay",
-        relay_status == ProcessStatus::Running,
-        relay_url,
-    );
-    display::service_status(
-        "ngrok",
-        ngrok_status == ProcessStatus::Running,
-        if ngrok_status == ProcessStatus::Running {
-            "tunnel active"
-        } else {
-            "start it to expose your agent"
-        },
-    );
+
+    if uses_local_relay(config_store) {
+        let relay_status = relay.status().await;
+        let ngrok_status = ngrok.status().await;
+
+        display::service_status(
+            "relay",
+            relay_status == ProcessStatus::Running,
+            if relay_status == ProcessStatus::Running {
+                "localhost"
+            } else {
+                "not running"
+            },
+        );
+        display::service_status(
+            "ngrok",
+            ngrok_status == ProcessStatus::Running,
+            if ngrok_status == ProcessStatus::Running {
+                "tunnel active"
+            } else {
+                "start it to expose your agent"
+            },
+        );
+    }
+
     display::blank();
 }
 
@@ -103,70 +115,79 @@ fn format_process_detail(status: ProcessStatus) -> String {
 
 async fn handle_services(
     theme: &dialoguer::theme::ColorfulTheme,
+    config_store: &Arc<ConfigStore>,
     daemon: &Arc<DaemonManager>,
     relay: &Arc<RelayManager>,
     ngrok: &Arc<NgrokManager>,
 ) -> Result<()> {
-    let statuses = [
-        ("daemon", daemon.status().await),
-        ("relay", relay.status().await),
-        ("ngrok", ngrok.status().await),
-    ];
+    let local_relay = uses_local_relay(config_store);
 
-    let choices: Vec<String> = statuses
+    let mut entries: Vec<(&str, ProcessStatus)> = vec![
+        ("daemon", daemon.status().await),
+    ];
+    if local_relay {
+        entries.push(("relay", relay.status().await));
+        entries.push(("ngrok", ngrok.status().await));
+    }
+
+    let choices: Vec<String> = entries
         .iter()
         .map(|(name, status)| format!("{} — currently {}", name, status))
         .collect();
 
-    let selection = Select::with_theme(theme)
-        .with_prompt("Which service?")
-        .items(&choices)
-        .interact_opt()?;
+    let selection = ui::prompt(|| {
+        Select::with_theme(theme)
+            .with_prompt("Which service?")
+            .items(&choices)
+            .interact_opt()
+    })?;
 
     let Some(idx) = selection else {
         return Ok(());
     };
 
-    let (name, status) = statuses[idx];
+    let (name, status) = entries[idx];
+    let running = status == ProcessStatus::Running;
 
-    match status {
-        ProcessStatus::Running => {
-            let stop = Confirm::with_theme(theme)
+    if running {
+        let stop = ui::prompt(|| {
+            Confirm::with_theme(theme)
                 .with_prompt(format!("Stop {}?", name))
                 .default(false)
-                .interact()?;
-            if stop {
-                let spinner = ProgressBar::new_spinner();
-                spinner.set_message(format!("Stopping {}...", name));
-                spinner.enable_steady_tick(Duration::from_millis(80));
-                match idx {
-                    0 => daemon.stop().await?,
-                    1 => relay.stop().await?,
-                    2 => ngrok.stop().await?,
-                    _ => {}
-                }
-                spinner.finish_and_clear();
-                display::success(&format!("{} stopped.", name));
+                .interact()
+        })?;
+        if stop {
+            let spinner = ProgressBar::new_spinner();
+            spinner.set_message(format!("Stopping {}...", name));
+            spinner.enable_steady_tick(Duration::from_millis(80));
+            match name {
+                "daemon" => daemon.stop().await?,
+                "relay" => relay.stop().await?,
+                "ngrok" => ngrok.stop().await?,
+                _ => {}
             }
+            spinner.finish_and_clear();
+            display::success(&format!("{} stopped.", name));
         }
-        _ => {
-            let start = Confirm::with_theme(theme)
+    } else {
+        let start = ui::prompt(|| {
+            Confirm::with_theme(theme)
                 .with_prompt(format!("Start {}?", name))
                 .default(true)
-                .interact()?;
-            if start {
-                let spinner = ProgressBar::new_spinner();
-                spinner.set_message(format!("Starting {}...", name));
-                spinner.enable_steady_tick(Duration::from_millis(80));
-                match idx {
-                    0 => daemon.start().await?,
-                    1 => relay.start().await?,
-                    2 => ngrok.start().await?,
-                    _ => {}
-                }
-                spinner.finish_and_clear();
-                display::success(&format!("{} started.", name));
+                .interact()
+        })?;
+        if start {
+            let spinner = ProgressBar::new_spinner();
+            spinner.set_message(format!("Starting {}...", name));
+            spinner.enable_steady_tick(Duration::from_millis(80));
+            match name {
+                "daemon" => daemon.start().await?,
+                "relay" => relay.start().await?,
+                "ngrok" => ngrok.start().await?,
+                _ => {}
             }
+            spinner.finish_and_clear();
+            display::success(&format!("{} started.", name));
         }
     }
 

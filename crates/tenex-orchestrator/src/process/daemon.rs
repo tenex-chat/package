@@ -18,13 +18,15 @@ use super::{
 
 /// Manages the TENEX daemon process lifecycle.
 ///
-/// Resolution order for daemon binary:
+/// Resolution order for backend binary:
 /// 1. Compiled binary at `<repo_root>/deps/backend/dist/tenex-daemon`
 /// 2. Run via bun from source: `bun run <repo_root>/deps/backend/src/index.ts daemon`
-/// 3. `tenex-daemon` on system PATH
+/// 3. Bun global bin: `~/.bun/bin/tenex-backend`
+/// 4. `tenex-backend` on system PATH
 pub struct DaemonManager {
     repo_root: Option<PathBuf>,
     config_store: Arc<ConfigStore>,
+    boot_patterns: std::sync::RwLock<Vec<String>>,
     status: Arc<RwLock<ProcessStatus>>,
     last_error: Arc<RwLock<Option<String>>>,
     logs: Arc<Mutex<VecDeque<LogLine>>>,
@@ -41,12 +43,20 @@ impl DaemonManager {
         Self {
             repo_root,
             config_store,
+            boot_patterns: std::sync::RwLock::new(Vec::new()),
             status: Arc::new(RwLock::new(ProcessStatus::Stopped)),
             last_error: Arc::new(RwLock::new(None)),
             logs: Arc::new(Mutex::new(VecDeque::with_capacity(MAX_LOG_LINES))),
             child: Arc::new(Mutex::new(None)),
             status_tx,
             log_tx,
+        }
+    }
+
+    /// Set project d-tag patterns to auto-boot on daemon start.
+    pub fn set_boot_patterns(&self, patterns: Vec<String>) {
+        if let Ok(mut bp) = self.boot_patterns.write() {
+            *bp = patterns;
         }
     }
 
@@ -58,6 +68,26 @@ impl DaemonManager {
     }
 
     fn resolve_executable(&self) -> Option<(String, Vec<String>)> {
+        // 0. TENEX_BACKEND env var override (for development)
+        if let Ok(val) = std::env::var("TENEX_BACKEND") {
+            let path = std::path::PathBuf::from(&val);
+            if path.exists() {
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if ext == "ts" || ext == "js" {
+                    let bun = find_bun().unwrap_or_else(|| "bun".into());
+                    return Some((
+                        bun,
+                        vec![
+                            "run".into(),
+                            path.to_string_lossy().into(),
+                            "daemon".into(),
+                        ],
+                    ));
+                }
+                return Some((path.to_string_lossy().into(), vec!["daemon".into()]));
+            }
+        }
+
         if let Some(root) = &self.repo_root {
             let compiled = root.join("deps/backend/dist/tenex-daemon");
             if compiled.exists() {
@@ -79,8 +109,16 @@ impl DaemonManager {
             }
         }
 
-        if which_exists("tenex-daemon") {
-            return Some(("tenex-daemon".into(), vec!["daemon".into()]));
+        // Check bun global bin directory
+        if let Some(home) = dirs::home_dir() {
+            let bun_global = home.join(".bun/bin/tenex-backend");
+            if bun_global.exists() {
+                return Some((bun_global.to_string_lossy().into(), vec!["daemon".into()]));
+            }
+        }
+
+        if which_exists("tenex-backend") {
+            return Some(("tenex-backend".into(), vec!["daemon".into()]));
         }
 
         None
@@ -138,7 +176,7 @@ impl ProcessManager for DaemonManager {
         }
 
         let (executable, mut arguments) = self.resolve_executable().context(
-            "Cannot find tenex daemon binary. Looked for: deps/backend/dist/tenex-daemon, bun + deps/backend/src/index.ts",
+            "Cannot find tenex backend. Install with: bun install -g @tenex-chat/backend",
         )?;
 
         // The daemon enters interactive setup mode if whitelisted pubkeys or LLM
@@ -151,6 +189,13 @@ impl ProcessManager for DaemonManager {
         }
         arguments.push("--whitelist".into());
         arguments.push(pubkeys.join(","));
+
+        if let Ok(patterns) = self.boot_patterns.read() {
+            for pattern in patterns.iter() {
+                arguments.push("--boot".into());
+                arguments.push(pattern.clone());
+            }
+        }
 
         let llms = self.config_store.load_llms();
         if llms.configurations.is_empty() {

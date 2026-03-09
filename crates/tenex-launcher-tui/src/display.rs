@@ -111,19 +111,7 @@ pub fn blank() {
 /// Print the welcome banner.
 pub fn welcome() {
     println!();
-    println!(
-        "  {}",
-        style("▲ T E N E X").color256(ACCENT).bold()
-    );
-    println!();
-    println!(
-        "  {}",
-        style("Your AI agent team, powered by Nostr.").bold()
-    );
-    println!(
-        "  {}",
-        style("Let's get everything set up.").dim()
-    );
+    crate::logo::print_logo();
     println!();
 }
 

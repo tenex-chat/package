@@ -10,12 +10,13 @@ import (
 
 // Config represents the relay configuration
 type Config struct {
-	Port        int              `json:"port"`
-	BindAddress string           `json:"bind_address"`
-	DataDir     string           `json:"data_dir"`
-	NIP11       NIP11Config      `json:"nip11"`
-	Limits      LimitsConfig     `json:"limits"`
-	Sync        SyncConfig       `json:"sync"`
+	Port         int          `json:"port"`
+	BindAddress  string       `json:"bind_address"`
+	DataDir      string       `json:"data_dir"`
+	NIP11        NIP11Config  `json:"nip11"`
+	Limits       LimitsConfig `json:"limits"`
+	Sync         SyncConfig   `json:"sync"`
+	AdminPubkeys []string     `json:"admin_pubkeys"`
 }
 
 // NIP11Config contains all NIP-11 relay information document fields
@@ -31,11 +32,11 @@ type NIP11Config struct {
 
 // LimitsConfig contains relay limits
 type LimitsConfig struct {
-	MaxMessageLength  int `json:"max_message_length"`
-	MaxSubscriptions  int `json:"max_subscriptions"`
-	MaxFilters        int `json:"max_filters"`
-	MaxEventTags      int `json:"max_event_tags"`
-	MaxContentLength  int `json:"max_content_length"`
+	MaxMessageLength int `json:"max_message_length"`
+	MaxSubscriptions int `json:"max_subscriptions"`
+	MaxFilters       int `json:"max_filters"`
+	MaxEventTags     int `json:"max_event_tags"`
+	MaxContentLength int `json:"max_content_length"`
 }
 
 // SyncConfig contains relay sync settings
@@ -75,7 +76,7 @@ func DefaultConfig() *Config {
 		},
 		Sync: SyncConfig{
 			Relays: []string{"wss://tenex.chat"},
-			Kinds:  []int{4199, 4129, 4200, 4201, 4202, 34199},
+			Kinds:  []int{4199, 14199, 4129, 4200, 4201, 4202, 34199},
 		},
 	}
 }

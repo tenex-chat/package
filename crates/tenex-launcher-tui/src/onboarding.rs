@@ -117,6 +117,27 @@ fn find_bun() -> Option<String> {
     None
 }
 
+fn find_node() -> Option<String> {
+    for c in &["/opt/homebrew/bin/node", "/usr/local/bin/node"] {
+        if std::path::Path::new(c).exists() {
+            return Some(c.to_string());
+        }
+    }
+
+    if SysCommand::new("which")
+        .arg("node")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        return Some("node".to_string());
+    }
+
+    None
+}
+
 fn ensure_bun() -> Result<String> {
     if let Some(bun) = find_bun() {
         return Ok(bun);
@@ -460,20 +481,12 @@ fn step_delegate_to_backend(
         }
     };
 
-    let supports_local_relay_url = if local_relay_url.is_some() {
-        backend_supports_local_relay_url(&backend_cmd)
-    } else {
-        false
-    };
-
     let mut args = vec!["setup", "init"];
     let url_owned;
-    if let Some(url) = local_relay_url.filter(|_| supports_local_relay_url) {
+    if let Some(url) = local_relay_url {
         args.push("--local-relay-url");
         url_owned = url.to_string();
         args.push(&url_owned);
-    } else if local_relay_url.is_some() {
-        display::hint("Installed backend does not support --local-relay-url; continuing without it.");
     }
 
     let status = backend_cmd
@@ -497,26 +510,6 @@ fn step_delegate_to_backend(
     }
 
     Ok(())
-}
-
-fn backend_supports_local_relay_url(backend_cmd: &BackendCmd) -> bool {
-    let output = backend_cmd
-        .command(&["setup", "init", "--help"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
-
-    let Ok(out) = output else {
-        return false;
-    };
-
-    let mut text = String::new();
-    text.push_str(&String::from_utf8_lossy(&out.stdout));
-    text.push('\n');
-    text.push_str(&String::from_utf8_lossy(&out.stderr));
-
-    text.contains("--local-relay-url")
 }
 
 /// A resolved backend command: program + base arguments.
@@ -557,6 +550,26 @@ fn resolve_backend_bin(backend_override: Option<&str>) -> Option<BackendCmd> {
                 base_args: vec!["run".into(), path.to_string_lossy().into()],
             }
         } else {
+            if let Ok(canonical) = std::fs::canonicalize(&path) {
+                if canonical
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n == "daemon-wrapper.cjs")
+                    .unwrap_or(false)
+                {
+                    if let Some(dir) = canonical.parent() {
+                        let index_js = dir.join("index.js");
+                        if index_js.exists() {
+                            let node = find_node().unwrap_or_else(|| "node".into());
+                            return BackendCmd {
+                                program: node,
+                                base_args: vec![index_js.to_string_lossy().into()],
+                            };
+                        }
+                    }
+                }
+            }
+
             BackendCmd {
                 program: path.to_string_lossy().into(),
                 base_args: vec![],

@@ -273,7 +273,16 @@ pub async fn run(config_store: &Arc<ConfigStore>, backend_override: Option<&str>
     } else if relay_started {
         let sp = spinner();
         sp.set_message("Stopping local relay...");
-        let _ = relay.stop().await;
+        match tokio::time::timeout(std::time::Duration::from_secs(8), relay.stop()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!("Failed to stop local relay after onboarding: {}", e);
+            }
+            Err(_) => {
+                tracing::warn!("Timed out stopping local relay after onboarding");
+                display::context("Relay shutdown timed out; it may still be running.");
+            }
+        }
         sp.finish_and_clear();
     }
 
@@ -451,12 +460,20 @@ fn step_delegate_to_backend(
         }
     };
 
+    let supports_local_relay_url = if local_relay_url.is_some() {
+        backend_supports_local_relay_url(&backend_cmd)
+    } else {
+        false
+    };
+
     let mut args = vec!["setup", "init"];
     let url_owned;
-    if let Some(url) = local_relay_url {
+    if let Some(url) = local_relay_url.filter(|_| supports_local_relay_url) {
         args.push("--local-relay-url");
         url_owned = url.to_string();
         args.push(&url_owned);
+    } else if local_relay_url.is_some() {
+        display::hint("Installed backend does not support --local-relay-url; continuing without it.");
     }
 
     let status = backend_cmd
@@ -480,6 +497,26 @@ fn step_delegate_to_backend(
     }
 
     Ok(())
+}
+
+fn backend_supports_local_relay_url(backend_cmd: &BackendCmd) -> bool {
+    let output = backend_cmd
+        .command(&["setup", "init", "--help"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    let Ok(out) = output else {
+        return false;
+    };
+
+    let mut text = String::new();
+    text.push_str(&String::from_utf8_lossy(&out.stdout));
+    text.push('\n');
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+
+    text.contains("--local-relay-url")
 }
 
 /// A resolved backend command: program + base arguments.

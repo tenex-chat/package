@@ -246,28 +246,61 @@ impl ProcessManager for DaemonManager {
 
         // Spawn termination watcher
         tokio::spawn(async move {
-            let exit_status = {
-                let mut guard = child_arc.lock().await;
-                if let Some(ref mut c) = *guard {
-                    c.wait().await.ok()
-                } else {
-                    None
-                }
-            };
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-            let current = *status_arc.read().await;
-            if current == ProcessStatus::Running || current == ProcessStatus::Starting {
-                let code = exit_status.and_then(|s| s.code()).unwrap_or(-1);
-                if code == 0 {
-                    *status_arc.write().await = ProcessStatus::Stopped;
-                    let _ = status_tx.send(ProcessStatus::Stopped);
-                } else {
-                    let msg = format!("Daemon exited with code {}", code);
-                    error!("{}", msg);
-                    *last_error_arc.write().await = Some(msg);
-                    *status_arc.write().await = ProcessStatus::Failed;
-                    let _ = status_tx.send(ProcessStatus::Failed);
+                // Poll child without holding the lock across an await.
+                let poll_result = {
+                    let mut guard = child_arc.lock().await;
+                    let Some(child) = guard.as_mut() else {
+                        return;
+                    };
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            *guard = None;
+                            Some(Ok(status))
+                        }
+                        Ok(None) => None,
+                        Err(e) => {
+                            *guard = None;
+                            Some(Err(e))
+                        }
+                    }
+                };
+
+                let Some(result) = poll_result else {
+                    continue;
+                };
+
+                let current = *status_arc.read().await;
+                if current != ProcessStatus::Running && current != ProcessStatus::Starting {
+                    return;
                 }
+
+                match result {
+                    Ok(exit_status) => {
+                        let code = exit_status.code().unwrap_or(-1);
+                        if code == 0 {
+                            *status_arc.write().await = ProcessStatus::Stopped;
+                            let _ = status_tx.send(ProcessStatus::Stopped);
+                        } else {
+                            let msg = format!("Daemon exited with code {}", code);
+                            error!("{}", msg);
+                            *last_error_arc.write().await = Some(msg);
+                            *status_arc.write().await = ProcessStatus::Failed;
+                            let _ = status_tx.send(ProcessStatus::Failed);
+                        }
+                    }
+                    Err(e) => {
+                        let msg = format!("Failed to poll daemon process: {}", e);
+                        error!("{}", msg);
+                        *last_error_arc.write().await = Some(msg);
+                        *status_arc.write().await = ProcessStatus::Failed;
+                        let _ = status_tx.send(ProcessStatus::Failed);
+                    }
+                }
+
+                return;
             }
         });
 

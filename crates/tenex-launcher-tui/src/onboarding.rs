@@ -20,8 +20,8 @@ use crate::ui;
 /// Maximum items to show in a MultiSelect list before truncating.
 const MAX_LIST_ITEMS: usize = 30;
 
-/// npm package name for the TENEX backend CLI.
-const BACKEND_PACKAGE: &str = "@tenex-chat/backend";
+/// npm package spec used for global installation.
+const BACKEND_PACKAGE_SPEC: &str = "@tenex-chat/backend@latest";
 
 /// Binary name installed by the backend package.
 const BACKEND_BIN: &str = "tenex-backend";
@@ -153,7 +153,7 @@ fn spawn_backend_install(bun: &str) -> Option<tokio::task::JoinHandle<Result<()>
     let bun = bun.to_string();
     Some(tokio::spawn(async move {
         let status = tokio::process::Command::new(&bun)
-            .args(["install", "-g", &format!("{}@latest", BACKEND_PACKAGE)])
+            .args(["install", "-g", BACKEND_PACKAGE_SPEC])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -161,7 +161,7 @@ fn spawn_backend_install(bun: &str) -> Option<tokio::task::JoinHandle<Result<()>
             .await?;
 
         if !status.success() {
-            anyhow::bail!("bun install -g {} failed", BACKEND_PACKAGE);
+            anyhow::bail!("bun install -g {} failed", BACKEND_PACKAGE_SPEC);
         }
         Ok(())
     }))
@@ -446,7 +446,7 @@ fn step_delegate_to_backend(
         Some(cmd) => cmd,
         None => {
             display::context("Backend binary not found — skipping setup.");
-            display::hint("Install the backend with: bun add -g @tenex-chat/backend");
+            display::hint("Install the backend with: bun add -g @tenex-chat/backend@latest");
             return Ok(());
         }
     };

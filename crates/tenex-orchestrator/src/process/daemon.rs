@@ -176,7 +176,7 @@ impl ProcessManager for DaemonManager {
         }
 
         let (executable, mut arguments) = self.resolve_executable().context(
-            "Cannot find tenex backend. Install with: bun install -g @tenex-chat/backend",
+            "Cannot find tenex backend. Install with: bun install -g @tenex-chat/backend@latest",
         )?;
 
         // The daemon enters interactive setup mode if whitelisted pubkeys or LLM

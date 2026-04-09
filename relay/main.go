@@ -32,6 +32,26 @@ func main() {
 
 	flag.Parse()
 
+	// migrate subcommand: import JSONL (or legacy events.json) into BadgerDB
+	// Usage: tenex-relay migrate [/path/to/export.jsonl[.gz]]
+	if flag.NArg() > 0 && flag.Arg(0) == "migrate" {
+		config, err := LoadConfig(*configPath)
+		if err != nil {
+			log.Fatalf("Failed to load configuration: %v", err)
+		}
+		if *port != 0 {
+			config.Port = *port
+		}
+		inputPath := ""
+		if flag.NArg() > 1 {
+			inputPath = flag.Arg(1)
+		}
+		if err := runMigrate(config, inputPath); err != nil {
+			log.Fatalf("Migration failed: %v", err)
+		}
+		return
+	}
+
 	// Show version
 	if *showVersion {
 		fmt.Printf("tenex-relay %s\n", Version)

@@ -11,19 +11,27 @@ import (
 	"sync"
 	"time"
 
+	badger "github.com/dgraph-io/badger/v4"
+	"github.com/fiatjaf/eventstore"
+	evbadger "github.com/fiatjaf/eventstore/badger"
 	"github.com/fiatjaf/khatru"
 	"github.com/fiatjaf/khatru/policies"
 	"github.com/nbd-wtf/go-nostr"
 )
 
+// silentBadger suppresses BadgerDB's internal logging.
+func silentBadger(opts badger.Options) badger.Options {
+	return opts.WithLogger(nil)
+}
+
 // Relay wraps a Khatru relay with TENEX-specific configuration
 type Relay struct {
-	config  *Config
-	khatru  *khatru.Relay
-	server  *http.Server
-	storage *Storage
-	syncer  *Syncer
-	acl     *ACL
+	config *Config
+	khatru *khatru.Relay
+	server *http.Server
+	db     eventstore.Store
+	syncer *Syncer
+	acl    *ACL
 
 	mu        sync.RWMutex
 	startTime time.Time
@@ -31,27 +39,26 @@ type Relay struct {
 
 // NewRelay creates a new relay with the given configuration
 func NewRelay(config *Config) (*Relay, error) {
-	// Ensure data directory exists
 	if err := config.EnsureDataDir(); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
-	// Initialize storage
-	dbPath := filepath.Join(config.DataDir, "events.json")
-	storage, err := NewStorage(dbPath)
-	if err != nil {
+	dbImpl := &evbadger.BadgerBackend{
+		Path:                  filepath.Join(config.DataDir, "badger"),
+		BadgerOptionsModifier: silentBadger,
+	}
+	if err := dbImpl.Init(); err != nil {
 		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}
+	var db eventstore.Store = dbImpl
 
-	// Create Khatru relay
 	relay := khatru.NewRelay()
+	relay.MaxMessageSize = int64(config.Limits.MaxMessageLength)
 
-	// Configure NIP-11 relay information
 	relay.Info.Name = config.NIP11.Name
 	relay.Info.Description = config.NIP11.Description
 	relay.Info.PubKey = config.NIP11.Pubkey
 	relay.Info.Contact = config.NIP11.Contact
-	// Convert []int to []any for SupportedNIPs
 	supportedNIPs := make([]any, len(config.NIP11.SupportedNIPs))
 	for i, nip := range config.NIP11.SupportedNIPs {
 		supportedNIPs[i] = nip
@@ -60,64 +67,39 @@ func NewRelay(config *Config) (*Relay, error) {
 	relay.Info.Software = config.NIP11.Software
 	relay.Info.Version = config.NIP11.Version
 
-	// Set up storage handlers
-	relay.StoreEvent = append(relay.StoreEvent, storage.SaveEvent)
-	relay.QueryEvents = append(relay.QueryEvents, storage.QueryEvents)
-	relay.DeleteEvent = append(relay.DeleteEvent, storage.DeleteEvent)
-	relay.CountEvents = append(relay.CountEvents, storage.CountEvents)
+	relay.StoreEvent = append(relay.StoreEvent, db.SaveEvent)
+	relay.QueryEvents = append(relay.QueryEvents, db.QueryEvents)
+	relay.DeleteEvent = append(relay.DeleteEvent, db.DeleteEvent)
+	relay.CountEvents = append(relay.CountEvents, dbImpl.CountEvents)
 
-	// NIP-9: Handle deletion events (kind 5)
-	// When a kind 5 event is stored, delete the referenced events
+	// NIP-9: handle deletion events (kind 5)
 	relay.OnEventSaved = append(relay.OnEventSaved, func(ctx context.Context, event *nostr.Event) {
 		if event.Kind != 5 {
 			return
 		}
-
-		// Process each 'e' tag (event IDs to delete)
 		for _, tag := range event.Tags {
 			if len(tag) >= 2 && tag[0] == "e" {
 				targetID := tag[1]
-
-				// Query the target event to verify pubkey matches
-				ch, err := storage.QueryEvents(ctx, nostr.Filter{
-					IDs:   []string{targetID},
-					Limit: 1,
-				})
+				ch, err := db.QueryEvents(ctx, nostr.Filter{IDs: []string{targetID}, Limit: 1})
 				if err != nil {
 					log.Printf("NIP-9: failed to query event %s: %v", targetID, err)
 					continue
 				}
-
-				// Check if event exists and pubkey matches
 				for targetEvent := range ch {
 					if targetEvent.PubKey == event.PubKey {
-						// Same author - delete the event
-						if err := storage.DeleteEvent(ctx, targetEvent); err != nil {
+						if err := db.DeleteEvent(ctx, targetEvent); err != nil {
 							log.Printf("NIP-9: failed to delete event %s: %v", targetID, err)
 						} else {
-							targetIDLog := targetID
-							if len(targetIDLog) > 12 {
-								targetIDLog = targetIDLog[:12]
-							}
-							pubKeyLog := event.PubKey
-							if len(pubKeyLog) > 12 {
-								pubKeyLog = pubKeyLog[:12]
-							}
-							log.Printf("NIP-9: deleted event %s (requested by %s...)", targetIDLog, pubKeyLog)
+							log.Printf("NIP-9: deleted event %s (requested by %s...)", truncateForLog(targetID, 12), truncateForLog(event.PubKey, 12))
 						}
 					} else {
-						targetIDLog := targetID
-						if len(targetIDLog) > 12 {
-							targetIDLog = targetIDLog[:12]
-						}
-						log.Printf("NIP-9: ignoring deletion request for %s (pubkey mismatch)", targetIDLog)
+						log.Printf("NIP-9: ignoring deletion request for %s (pubkey mismatch)", truncateForLog(targetID, 12))
 					}
 				}
 			}
 		}
 	})
 
-	// Apply default policies
 	preventLargeTags := policies.PreventLargeTags(config.Limits.MaxEventTags)
 	relay.RejectEvent = append(relay.RejectEvent,
 		func(ctx context.Context, event *nostr.Event) (reject bool, msg string) {
@@ -127,7 +109,6 @@ func NewRelay(config *Config) (*Relay, error) {
 			}
 			return reject, msg
 		},
-		// Enforce MaxContentLength
 		func(ctx context.Context, event *nostr.Event) (reject bool, msg string) {
 			if len(event.Content) > config.Limits.MaxContentLength {
 				msg := fmt.Sprintf("content too large: %d > %d bytes", len(event.Content), config.Limits.MaxContentLength)
@@ -138,14 +119,10 @@ func NewRelay(config *Config) (*Relay, error) {
 		},
 	)
 
-	// Allow all connections (local relay, trust local network)
 	relay.RejectConnection = append(relay.RejectConnection,
-		func(r *http.Request) bool {
-			return false // Accept all connections
-		},
+		func(r *http.Request) bool { return false },
 	)
 
-	// NIP-42: require auth for subscriptions so the ACL can identify subscribers
 	relay.RejectFilter = append(relay.RejectFilter,
 		func(ctx context.Context, filter nostr.Filter) (reject bool, msg string) {
 			if khatru.GetAuthed(ctx) == "" {
@@ -156,20 +133,17 @@ func NewRelay(config *Config) (*Relay, error) {
 		},
 	)
 
-	// ACL: whitelist-based read access control
-	acl := NewACL(config.AdminPubkeys, storage)
+	acl := NewACL(config.AdminPubkeys, db)
 	relay.OverwriteFilter = append(relay.OverwriteFilter, acl.OverwriteFilterHook)
 	relay.PreventBroadcast = append(relay.PreventBroadcast, acl.PreventBroadcastHook)
 	relay.OnEventSaved = append(relay.OnEventSaved, acl.OnEventSavedHook)
 
-	r := &Relay{
-		config:  config,
-		khatru:  relay,
-		storage: storage,
-		acl:     acl,
-	}
-
-	return r, nil
+	return &Relay{
+		config: config,
+		khatru: relay,
+		db:     db,
+		acl:    acl,
+	}, nil
 }
 
 // Start starts the relay server
@@ -179,22 +153,11 @@ func (r *Relay) Start(ctx context.Context) error {
 	r.mu.Unlock()
 	r.acl.StartWhitelistFileSync(ctx)
 
-	// Create HTTP mux
 	mux := http.NewServeMux()
-
-	// Health endpoint
 	mux.HandleFunc("/health", r.handleHealth)
-
-	// Stats endpoint
 	mux.HandleFunc("/stats", r.handleStats)
-
-	// NIP-11 info endpoint (served at root for Accept: application/nostr+json)
-	// Khatru handles this automatically at the WebSocket endpoint
-
-	// WebSocket endpoint (Khatru relay)
 	mux.Handle("/", r.khatru)
 
-	// Create server
 	addr := fmt.Sprintf("%s:%d", r.config.BindAddress, r.config.Port)
 	r.server = &http.Server{
 		Addr:         addr,
@@ -207,7 +170,6 @@ func (r *Relay) Start(ctx context.Context) error {
 	log.Printf("Starting TENEX relay on %s", addr)
 	log.Printf("NIP-11 Info: %s - %s", r.config.NIP11.Name, r.config.NIP11.Description)
 
-	// Start server in goroutine
 	errCh := make(chan error, 1)
 	go func() {
 		if err := r.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -215,9 +177,8 @@ func (r *Relay) Start(ctx context.Context) error {
 		}
 	}()
 
-	// Start syncer if sync relays are configured
 	if len(r.config.Sync.Relays) > 0 {
-		r.syncer = NewSyncer(r.config.Sync, r.storage)
+		r.syncer = NewSyncer(r.config.Sync, r.db)
 		r.syncer.OnEventStored = func(event *nostr.Event) {
 			if event.Kind == 14199 {
 				r.acl.ProcessWhitelistEvent(event)
@@ -226,7 +187,6 @@ func (r *Relay) Start(ctx context.Context) error {
 		r.syncer.Start(ctx)
 	}
 
-	// Wait for context cancellation or error
 	select {
 	case err := <-errCh:
 		return err
@@ -239,12 +199,10 @@ func (r *Relay) Start(ctx context.Context) error {
 func (r *Relay) Shutdown() error {
 	log.Println("Shutting down relay...")
 
-	// Stop syncer first
 	if r.syncer != nil {
 		r.syncer.Stop()
 	}
 
-	// Shutdown HTTP server with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -254,18 +212,14 @@ func (r *Relay) Shutdown() error {
 		}
 	}
 
-	// Close storage
-	if r.storage != nil {
-		if err := r.storage.Close(); err != nil {
-			log.Printf("Storage close error: %v", err)
-		}
+	if r.db != nil {
+		r.db.Close()
 	}
 
 	log.Println("Relay shutdown complete")
 	return nil
 }
 
-// handleHealth responds to health check requests
 func (r *Relay) handleHealth(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -275,13 +229,15 @@ func (r *Relay) handleHealth(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-// handleStats responds with relay statistics
 func (r *Relay) handleStats(w http.ResponseWriter, req *http.Request) {
 	r.mu.RLock()
 	uptime := time.Since(r.startTime)
 	r.mu.RUnlock()
 
-	count, _ := r.storage.CountEvents(req.Context(), nostr.Filter{})
+	var count int64
+	if counter, ok := r.db.(eventstore.Counter); ok {
+		count, _ = counter.CountEvents(req.Context(), nostr.Filter{})
+	}
 
 	stats := map[string]interface{}{
 		"uptime_seconds": int(uptime.Seconds()),
@@ -328,7 +284,6 @@ func WriteConfigTemplate(path string) error {
 		return err
 	}
 
-	// Ensure parent directory exists
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err

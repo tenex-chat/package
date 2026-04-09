@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fiatjaf/eventstore"
 	"github.com/fiatjaf/khatru"
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -25,12 +26,12 @@ type ACL struct {
 	fileAllow    map[string]bool
 	mu           sync.RWMutex
 
-	storage *Storage
+	storage eventstore.Store
 
 	whitelistFilePath string
 }
 
-func NewACL(adminPubkeys []string, storage *Storage) *ACL {
+func NewACL(adminPubkeys []string, storage eventstore.Store) *ACL {
 	admins := make(map[string]bool, len(adminPubkeys))
 	for _, pk := range adminPubkeys {
 		admins[pk] = true

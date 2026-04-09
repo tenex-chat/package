@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fiatjaf/eventstore"
 	"github.com/nbd-wtf/go-nostr"
 )
 
@@ -51,7 +52,7 @@ func (s *SyncStats) snapshot() map[string]interface{} {
 // Syncer manages event synchronization from remote relays
 type Syncer struct {
 	config        SyncConfig
-	storage       *Storage
+	storage       eventstore.Store
 	stats         SyncStats
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
@@ -59,7 +60,7 @@ type Syncer struct {
 }
 
 // NewSyncer creates a new Syncer
-func NewSyncer(config SyncConfig, storage *Storage) *Syncer {
+func NewSyncer(config SyncConfig, storage eventstore.Store) *Syncer {
 	return &Syncer{
 		config:  config,
 		storage: storage,
@@ -286,13 +287,11 @@ func (s *Syncer) syncProfiles(ctx context.Context, relay *nostr.Relay, authors [
 	}
 }
 
-// storeEvent handles replaceable event semantics before storing
+// storeEvent saves an event, using ReplaceEvent for replaceable/addressable kinds.
 func (s *Syncer) storeEvent(ctx context.Context, event *nostr.Event) error {
 	var err error
-	if isReplaceable(event.Kind) {
-		err = s.storeReplaceableEvent(ctx, event)
-	} else if isParameterizedReplaceable(event.Kind) {
-		err = s.storeParameterizedReplaceableEvent(ctx, event)
+	if nostr.IsReplaceableKind(event.Kind) || nostr.IsAddressableKind(event.Kind) {
+		err = s.storage.ReplaceEvent(ctx, event)
 	} else {
 		err = s.storage.SaveEvent(ctx, event)
 	}
@@ -301,52 +300,6 @@ func (s *Syncer) storeEvent(ctx context.Context, event *nostr.Event) error {
 		s.OnEventStored(event)
 	}
 	return err
-}
-
-// storeReplaceableEvent handles kinds 0, 3, 10000-19999
-func (s *Syncer) storeReplaceableEvent(ctx context.Context, event *nostr.Event) error {
-	ch, err := s.storage.QueryEvents(ctx, nostr.Filter{
-		Authors: []string{event.PubKey},
-		Kinds:   []int{event.Kind},
-		Limit:   1,
-	})
-	if err != nil {
-		return s.storage.SaveEvent(ctx, event)
-	}
-
-	for existing := range ch {
-		if existing.CreatedAt >= event.CreatedAt {
-			return nil // existing is newer or same, skip
-		}
-		// Delete older event
-		s.storage.DeleteEvent(ctx, existing)
-	}
-
-	return s.storage.SaveEvent(ctx, event)
-}
-
-// storeParameterizedReplaceableEvent handles kinds 30000-39999
-func (s *Syncer) storeParameterizedReplaceableEvent(ctx context.Context, event *nostr.Event) error {
-	dTag := getTagValue(event, "d")
-
-	ch, err := s.storage.QueryEvents(ctx, nostr.Filter{
-		Authors: []string{event.PubKey},
-		Kinds:   []int{event.Kind},
-		Tags:    nostr.TagMap{"d": {dTag}},
-		Limit:   1,
-	})
-	if err != nil {
-		return s.storage.SaveEvent(ctx, event)
-	}
-
-	for existing := range ch {
-		if existing.CreatedAt >= event.CreatedAt {
-			return nil // existing is newer or same, skip
-		}
-		s.storage.DeleteEvent(ctx, existing)
-	}
-
-	return s.storage.SaveEvent(ctx, event)
 }
 
 func (s *Syncer) setRelayStatus(url string, connected bool, err error) {
@@ -358,24 +311,4 @@ func (s *Syncer) setRelayStatus(url string, connected bool, err error) {
 		status.LastError = err.Error()
 	}
 	s.stats.RelayStatus[url] = status
-}
-
-// isReplaceable returns true for kinds 0, 3, and 10000-19999
-func isReplaceable(kind int) bool {
-	return kind == 0 || kind == 3 || (kind >= 10000 && kind <= 19999)
-}
-
-// isParameterizedReplaceable returns true for kinds 30000-39999
-func isParameterizedReplaceable(kind int) bool {
-	return kind >= 30000 && kind <= 39999
-}
-
-// getTagValue returns the first value for a given tag name, or empty string
-func getTagValue(event *nostr.Event, tagName string) string {
-	for _, tag := range event.Tags {
-		if len(tag) >= 2 && tag[0] == tagName {
-			return tag[1]
-		}
-	}
-	return ""
 }

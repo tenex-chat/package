@@ -68,15 +68,15 @@ func DefaultConfig() *Config {
 			Version:       "0.1.0",
 		},
 		Limits: LimitsConfig{
-			MaxMessageLength: 524288,
-			MaxSubscriptions: 100,
+			MaxMessageLength: 2097152,
+			MaxSubscriptions: 200,
 			MaxFilters:       50,
-			MaxEventTags:     2500,
-			MaxContentLength: 102400,
+			MaxEventTags:     8192,
+			MaxContentLength: 1048576,
 		},
 		Sync: SyncConfig{
 			Relays: []string{"wss://tenex.chat"},
-			Kinds:  []int{4199, 14199, 4129, 4200, 4201, 4202, 34199},
+			Kinds:  []int{1, 4199, 14199, 4129, 4200, 4201, 4202, 34199, 30023},
 		},
 	}
 }

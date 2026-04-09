@@ -75,7 +75,7 @@ func DefaultConfig() *Config {
 			MaxContentLength: 1048576,
 		},
 		Sync: SyncConfig{
-			Relays: []string{"wss://tenex.chat"},
+			Relays: []string{"wss://relay.tenex.chat"},
 			Kinds:  []int{1, 4199, 14199, 4129, 4200, 4201, 4202, 34199, 30023},
 		},
 	}

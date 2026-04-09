@@ -125,11 +125,24 @@ func NewRelay(config *Config) (*Relay, error) {
 
 	relay.RejectFilter = append(relay.RejectFilter,
 		func(ctx context.Context, filter nostr.Filter) (reject bool, msg string) {
-			if khatru.GetAuthed(ctx) == "" {
-				khatru.RequestAuth(ctx)
-				return true, "auth-required: authenticate to subscribe"
+			if khatru.GetAuthed(ctx) != "" {
+				return false, ""
 			}
-			return false, ""
+			// Allow unauthenticated subscriptions for ephemeral-only filters
+			if len(filter.Kinds) > 0 {
+				allEphemeral := true
+				for _, k := range filter.Kinds {
+					if !isEphemeral(k) {
+						allEphemeral = false
+						break
+					}
+				}
+				if allEphemeral {
+					return false, ""
+				}
+			}
+			khatru.RequestAuth(ctx)
+			return true, "auth-required: authenticate to subscribe"
 		},
 	)
 

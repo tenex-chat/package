@@ -37,6 +37,9 @@ type LimitsConfig struct {
 	MaxFilters       int `json:"max_filters"`
 	MaxEventTags     int `json:"max_event_tags"`
 	MaxContentLength int `json:"max_content_length"`
+	DefaultQueryLimit int `json:"default_query_limit"`
+	MaxQueryLimit int `json:"max_query_limit"`
+	MaxQueryWindowHours int `json:"max_query_window_hours"`
 }
 
 // SyncConfig contains relay sync settings
@@ -73,6 +76,9 @@ func DefaultConfig() *Config {
 			MaxFilters:       50,
 			MaxEventTags:     8192,
 			MaxContentLength: 1048576,
+			DefaultQueryLimit: 100,
+			MaxQueryLimit: 500,
+			MaxQueryWindowHours: 168,
 		},
 		Sync: SyncConfig{
 			Relays: []string{"wss://relay.tenex.chat"},
@@ -121,6 +127,18 @@ func (c *Config) Validate() error {
 
 	if c.DataDir == "" {
 		return errors.New("data_dir cannot be empty")
+	}
+
+	if c.Limits.DefaultQueryLimit < 1 {
+		return errors.New("limits.default_query_limit must be greater than 0")
+	}
+
+	if c.Limits.MaxQueryLimit < c.Limits.DefaultQueryLimit {
+		return errors.New("limits.max_query_limit must be greater than or equal to limits.default_query_limit")
+	}
+
+	if c.Limits.MaxQueryWindowHours < 1 {
+		return errors.New("limits.max_query_window_hours must be greater than 0")
 	}
 
 	return nil

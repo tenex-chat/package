@@ -170,6 +170,7 @@ impl RelayManager {
         let config_path = relay_dir.join("relay.json");
         let config = serde_json::json!({
             "port": port,
+            "bind_address": "127.0.0.1",
             "data_dir": data_dir.to_string_lossy(),
             "nip11": {
                 "name": "TENEX Local Relay",
@@ -185,7 +186,10 @@ impl RelayManager {
                 "max_subscriptions": 100,
                 "max_filters": 50,
                 "max_event_tags": 2500,
-                "max_content_length": 102400
+                "max_content_length": 102400,
+                "default_query_limit": 100,
+                "max_query_limit": 500,
+                "max_query_window_hours": 168
             },
             "sync": {
                 "relays": sync_relays,

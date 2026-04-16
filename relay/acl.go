@@ -148,9 +148,9 @@ func samePubkeySet(a, b map[string]bool) bool {
 	return true
 }
 
-// buildWhitelistFromStorage queries all stored 14199 events and iteratively
-// resolves transitive whitelist chains (admin→B, B→C, etc.). Called once
-// during initialization.
+// buildWhitelistFromStorage queries all stored 14199 events and whitelists
+// every p-tagged pubkey.  A 14199 is self-authorizing: the author signed it,
+// so we trust their declaration of backends/agents unconditionally.
 func (a *ACL) buildWhitelistFromStorage() {
 	ch, err := a.storage.QueryEvents(context.Background(), nostr.Filter{
 		Kinds: []int{14199},
@@ -160,27 +160,19 @@ func (a *ACL) buildWhitelistFromStorage() {
 		return
 	}
 
-	var events []*nostr.Event
 	for evt := range ch {
-		events = append(events, evt)
-	}
+		// Whitelist the 14199 author themselves
+		if !a.adminPubkeys[evt.PubKey] && !a.whitelist[evt.PubKey] {
+			a.whitelist[evt.PubKey] = true
+			log.Printf("[acl] whitelisted author %s... (published 14199)", truncatePubkey(evt.PubKey))
+		}
 
-	// Iteratively resolve transitive chains until no new entries are added
-	changed := true
-	for changed {
-		changed = false
-		for _, evt := range events {
-			if !a.adminPubkeys[evt.PubKey] && !a.whitelist[evt.PubKey] {
-				continue
-			}
-			for _, tag := range evt.Tags {
-				if len(tag) >= 2 && tag[0] == "p" {
-					pk := tag[1]
-					if !a.adminPubkeys[pk] && !a.whitelist[pk] {
-						a.whitelist[pk] = true
-						changed = true
-						log.Printf("[acl] whitelisted %s... (from stored 14199 by %s...)", truncatePubkey(pk), truncatePubkey(evt.PubKey))
-					}
+		for _, tag := range evt.Tags {
+			if len(tag) >= 2 && tag[0] == "p" {
+				pk := tag[1]
+				if !a.adminPubkeys[pk] && !a.whitelist[pk] {
+					a.whitelist[pk] = true
+					log.Printf("[acl] whitelisted %s... (from stored 14199 by %s...)", truncatePubkey(pk), truncatePubkey(evt.PubKey))
 				}
 			}
 		}
@@ -189,53 +181,33 @@ func (a *ACL) buildWhitelistFromStorage() {
 	log.Printf("[acl] built whitelist: %d admin(s), %d dynamic entries", len(a.adminPubkeys), len(a.whitelist))
 }
 
-// ProcessWhitelistEvent handles a kind 14199 event: if the author is
-// whitelisted, all p-tagged pubkeys get whitelisted. Recursively resolves
-// transitive chains for newly whitelisted pubkeys.
+// ProcessWhitelistEvent handles a kind 14199 event.  A 14199 is
+// self-authorizing: any authenticated user can publish one to declare
+// their backends/agents.  The author and all p-tagged pubkeys are
+// whitelisted unconditionally.
 func (a *ACL) ProcessWhitelistEvent(event *nostr.Event) {
 	if event.Kind != 14199 {
 		return
 	}
 
-	if !a.IsWhitelisted(event.PubKey) {
-		log.Printf("[acl] ignoring 14199 from non-whitelisted pubkey %s...", truncatePubkey(event.PubKey))
-		return
+	a.mu.Lock()
+
+	// Whitelist the author
+	if !a.adminPubkeys[event.PubKey] && !a.whitelist[event.PubKey] {
+		a.whitelist[event.PubKey] = true
+		log.Printf("[acl] whitelisted author %s... (published 14199)", truncatePubkey(event.PubKey))
 	}
 
-	var newlyWhitelisted []string
-
-	a.mu.Lock()
 	for _, tag := range event.Tags {
 		if len(tag) >= 2 && tag[0] == "p" {
 			pk := tag[1]
 			if !a.adminPubkeys[pk] && !a.whitelist[pk] {
 				a.whitelist[pk] = true
-				newlyWhitelisted = append(newlyWhitelisted, pk)
 				log.Printf("[acl] whitelisted %s... (14199 from %s...)", truncatePubkey(pk), truncatePubkey(event.PubKey))
 			}
 		}
 	}
 	a.mu.Unlock()
-
-	// Resolve transitive chains: newly whitelisted pubkeys may have their own 14199 events
-	for _, pk := range newlyWhitelisted {
-		a.resolveTransitiveWhitelist(pk)
-	}
-}
-
-func (a *ACL) resolveTransitiveWhitelist(pubkey string) {
-	ch, err := a.storage.QueryEvents(context.Background(), nostr.Filter{
-		Authors: []string{pubkey},
-		Kinds:   []int{14199},
-	})
-	if err != nil {
-		log.Printf("[acl] failed to query 14199 events for %s...: %v", truncatePubkey(pubkey), err)
-		return
-	}
-
-	for evt := range ch {
-		a.ProcessWhitelistEvent(evt)
-	}
 }
 
 // Public readable kinds are available to authenticated non-whitelisted users.

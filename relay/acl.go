@@ -241,7 +241,7 @@ func (a *ACL) resolveTransitiveWhitelist(pubkey string) {
 // Public readable kinds are available to authenticated non-whitelisted users.
 // These are TENEX metadata streams that should be broadly visible.
 func isPublicReadableKind(kind int) bool {
-	return kind == 4199 || kind == 34199
+	return kind == 4199 || kind == 14199 || kind == 34199
 }
 
 // isEphemeral returns true for kinds 20000-29999

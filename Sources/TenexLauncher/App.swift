@@ -134,6 +134,22 @@ struct TenexLauncherApp: App {
             let port = localRelay.port ?? 7777
 
             relayManager.configure(port: port)
+
+            // Determine owner pubkey: explicit config > first whitelisted > empty
+            // Note: Go relay will fail if auth is enabled and owner is empty (prevents lockout)
+            let ownerPubkey = localRelay.ownerPubkey
+                ?? configStore.config.whitelistedPubkeys?.first
+                ?? ""
+
+            // Configure NIP-42 auth if enabled
+            relayManager.configureAuth(
+                requiresAuth: localRelay.requiresAuth ?? false,
+                ownerPubkey: ownerPubkey,
+                whitelistedPubkeys: configStore.config.whitelistedPubkeys ?? [],
+                backendPrivateKey: configStore.config.tenexPrivateKey,
+                syncRelays: localRelay.syncRelays ?? ["wss://tenex.chat"]
+            )
+
             await relayManager.start()
 
             // If relay started successfully, start sync and drain pending events

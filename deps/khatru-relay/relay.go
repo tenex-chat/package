@@ -18,10 +18,11 @@ import (
 
 // Relay wraps a Khatru relay with TENEX-specific configuration
 type Relay struct {
-	config  *Config
-	khatru  *khatru.Relay
-	server  *http.Server
-	storage *Storage
+	config      *Config
+	khatru      *khatru.Relay
+	server      *http.Server
+	storage     *Storage
+	authManager *AuthManager
 
 	mu        sync.RWMutex
 	startTime time.Time
@@ -137,10 +138,42 @@ func NewRelay(config *Config) (*Relay, error) {
 		},
 	)
 
+	// Create auth manager
+	authManager := NewAuthManager(&config.Auth)
+
+	// NIP-42 Authentication: Reject events from unauthenticated/unauthorized users
+	if config.Auth.Enabled {
+		relay.RejectEvent = append(relay.RejectEvent,
+			func(ctx context.Context, event *nostr.Event) (reject bool, msg string) {
+				authedPubkey := khatru.GetAuthed(ctx)
+				if !authManager.IsAuthorized(authedPubkey) {
+					// Return auth-required prefix to trigger NIP-42 AUTH flow
+					return true, "auth-required: this relay requires authentication"
+				}
+				return false, ""
+			},
+		)
+
+		// NIP-42 Authentication: Reject filters from unauthenticated/unauthorized users
+		relay.RejectFilter = append(relay.RejectFilter,
+			func(ctx context.Context, filter nostr.Filter) (reject bool, msg string) {
+				authedPubkey := khatru.GetAuthed(ctx)
+				if !authManager.IsAuthorized(authedPubkey) {
+					// Return auth-required prefix to trigger NIP-42 AUTH flow
+					return true, "auth-required: this relay requires authentication"
+				}
+				return false, ""
+			},
+		)
+
+		log.Printf("[Auth] NIP-42 authentication enabled")
+	}
+
 	r := &Relay{
-		config:  config,
-		khatru:  relay,
-		storage: storage,
+		config:      config,
+		khatru:      relay,
+		storage:     storage,
+		authManager: authManager,
 	}
 
 	return r, nil
@@ -151,6 +184,11 @@ func (r *Relay) Start(ctx context.Context) error {
 	r.mu.Lock()
 	r.startTime = time.Now()
 	r.mu.Unlock()
+
+	// Start auth manager (subscribes to 24010 events for agent pubkeys)
+	if r.authManager != nil {
+		r.authManager.Start(ctx)
+	}
 
 	// Create HTTP mux
 	mux := http.NewServeMux()
@@ -201,6 +239,11 @@ func (r *Relay) Start(ctx context.Context) error {
 func (r *Relay) Shutdown() error {
 	log.Println("Shutting down relay...")
 
+	// Stop auth manager
+	if r.authManager != nil {
+		r.authManager.Stop()
+	}
+
 	// Shutdown HTTP server with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -240,12 +283,19 @@ func (r *Relay) handleStats(w http.ResponseWriter, req *http.Request) {
 
 	count, _ := r.storage.CountEvents(req.Context(), nostr.Filter{})
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	stats := map[string]interface{}{
 		"uptime_seconds": int(uptime.Seconds()),
 		"event_count":    count,
 		"relay_info":     r.config.NIP11,
-	})
+	}
+
+	// Include auth stats if auth manager is available
+	if r.authManager != nil {
+		stats["auth"] = r.authManager.Stats()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }
 
 // WriteConfigTemplate writes a config template to the given path

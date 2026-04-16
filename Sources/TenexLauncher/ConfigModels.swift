@@ -24,6 +24,9 @@ struct LocalRelayConfig: Codable {
     var autoStart: Bool?
     var port: Int?
     var syncRelays: [String]?
+    var requiresAuth: Bool?
+    /// Explicit owner pubkey for NIP-42 auth. If not set, falls back to first whitelisted pubkey.
+    var ownerPubkey: String?
 }
 
 struct LoggingConfig: Codable {

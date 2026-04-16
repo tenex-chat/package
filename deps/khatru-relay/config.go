@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/nbd-wtf/go-nostr"
 )
 
 // Config represents the relay configuration
@@ -16,6 +19,7 @@ type Config struct {
 	NIP11       NIP11Config      `json:"nip11"`
 	Limits      LimitsConfig     `json:"limits"`
 	Negentropy  NegentropyConfig `json:"negentropy"`
+	Auth        AuthConfig       `json:"auth"`
 }
 
 // NIP11Config contains all NIP-11 relay information document fields
@@ -43,6 +47,22 @@ type NegentropyConfig struct {
 	Enabled bool `json:"enabled"`
 }
 
+// AuthConfig contains NIP-42 authentication settings
+type AuthConfig struct {
+	// Enabled controls whether NIP-42 auth is required
+	Enabled bool `json:"enabled"`
+	// OwnerPubkey is the primary owner pubkey (always authorized)
+	OwnerPubkey string `json:"owner_pubkey"`
+	// WhitelistedPubkeys are additional pubkeys that are always authorized
+	WhitelistedPubkeys []string `json:"whitelisted_pubkeys"`
+	// BackendPrivateKey is the TENEX backend private key (hex); pubkey is derived from it
+	BackendPrivateKey string `json:"backend_private_key"`
+	// BackendPubkey is derived from BackendPrivateKey (populated after loading config)
+	BackendPubkey string `json:"-"`
+	// SyncRelays are relays to subscribe to for fetching 24010 events
+	SyncRelays []string `json:"sync_relays"`
+}
+
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
@@ -67,6 +87,14 @@ func DefaultConfig() *Config {
 		},
 		Negentropy: NegentropyConfig{
 			Enabled: true,
+		},
+		Auth: AuthConfig{
+			Enabled:           false,
+			OwnerPubkey:       "",
+			WhitelistedPubkeys: []string{},
+			BackendPrivateKey: "",
+			BackendPubkey:     "",
+			SyncRelays:        []string{},
 		},
 	}
 }
@@ -95,6 +123,21 @@ func LoadConfig(path string) (*Config, error) {
 	// Expand paths
 	config.DataDir = expandPath(config.DataDir)
 
+	// Derive backend pubkey from private key if provided
+	if config.Auth.BackendPrivateKey != "" {
+		pubkey, err := derivePublicKey(config.Auth.BackendPrivateKey)
+		if err != nil {
+			// SECURITY: If auth is enabled and backend key is invalid, fail fast
+			if config.Auth.Enabled {
+				return nil, errors.New("auth enabled but backend_private_key is invalid: " + err.Error())
+			}
+			// Auth disabled, log warning but continue
+			// Note: This means 24010 sync won't work, but relay can still function
+		} else {
+			config.Auth.BackendPubkey = pubkey
+		}
+	}
+
 	// Validate
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -111,6 +154,16 @@ func (c *Config) Validate() error {
 
 	if c.DataDir == "" {
 		return errors.New("data_dir cannot be empty")
+	}
+
+	// SECURITY: If auth is enabled, owner_pubkey must be set to prevent lockout
+	if c.Auth.Enabled && c.Auth.OwnerPubkey == "" {
+		return errors.New("auth.owner_pubkey is required when auth is enabled (prevents lockout)")
+	}
+
+	// Validate owner pubkey format if provided
+	if c.Auth.OwnerPubkey != "" && len(c.Auth.OwnerPubkey) != 64 {
+		return errors.New("auth.owner_pubkey must be a 64-character hex pubkey")
 	}
 
 	return nil
@@ -131,4 +184,24 @@ func expandPath(path string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+// derivePublicKey derives a Nostr pubkey (hex) from a hex private key
+func derivePublicKey(hexPrivateKey string) (string, error) {
+	if len(hexPrivateKey) != 64 {
+		return "", errors.New("private key must be 64 hex characters")
+	}
+
+	privKeyBytes, err := hex.DecodeString(hexPrivateKey)
+	if err != nil {
+		return "", err
+	}
+
+	// Use go-nostr's built-in key generation
+	pk, err := nostr.GetPublicKey(hex.EncodeToString(privKeyBytes))
+	if err != nil {
+		return "", err
+	}
+
+	return pk, nil
 }

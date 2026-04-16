@@ -45,6 +45,11 @@ final class RelayManager: ObservableObject {
 
     // Configuration
     private(set) var port: Int = 7777
+    private(set) var requiresAuth: Bool = false
+    private(set) var ownerPubkey: String = ""
+    private(set) var whitelistedPubkeys: [String] = []
+    private(set) var backendPrivateKey: String = ""  // Hex private key, Go derives pubkey
+    private(set) var syncRelays: [String] = []
 
     // Directories
     private var relayDir: URL {
@@ -107,6 +112,29 @@ final class RelayManager: ObservableObject {
 
     func configure(port: Int) {
         self.port = port
+    }
+
+    func configureAuth(
+        requiresAuth: Bool,
+        ownerPubkey: String,
+        whitelistedPubkeys: [String],
+        backendPrivateKey: String?,
+        syncRelays: [String]
+    ) {
+        self.requiresAuth = requiresAuth
+        self.ownerPubkey = ownerPubkey
+        self.whitelistedPubkeys = whitelistedPubkeys
+        self.syncRelays = syncRelays
+        self.backendPrivateKey = backendPrivateKey ?? ""
+
+        if requiresAuth {
+            logger.info("Auth configured: owner=\(self.truncatedPubkey(ownerPubkey)), whitelist=\(whitelistedPubkeys.count) pubkeys")
+        }
+    }
+
+    private func truncatedPubkey(_ pubkey: String) -> String {
+        guard pubkey.count > 16 else { return pubkey }
+        return "\(pubkey.prefix(8))..."
     }
 
     // MARK: - Lifecycle
@@ -259,6 +287,13 @@ final class RelayManager: ObservableObject {
             ],
             "negentropy": [
                 "enabled": true
+            ],
+            "auth": [
+                "enabled": requiresAuth,
+                "owner_pubkey": ownerPubkey,
+                "whitelisted_pubkeys": whitelistedPubkeys,
+                "backend_private_key": backendPrivateKey,
+                "sync_relays": syncRelays
             ]
         ]
 

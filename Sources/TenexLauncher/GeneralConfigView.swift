@@ -128,6 +128,13 @@ struct GeneralConfigView: View {
             if store.config.localRelay?.enabled == true {
                 Toggle("Auto-start with app", isOn: localRelayAutoStartBinding)
 
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Private Relay Mode", isOn: localRelayRequiresAuthBinding)
+                    Text("When enabled, only you and your AI agents can access the relay. Others will need to authenticate.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 HStack {
                     Text("Port")
                     Spacer()
@@ -172,6 +179,16 @@ struct GeneralConfigView: View {
                         Button("Start Relay") {
                             Task {
                                 relayManager.configure(port: store.config.localRelay?.port ?? 7777)
+
+                                // Configure NIP-42 auth if enabled
+                                relayManager.configureAuth(
+                                    requiresAuth: store.config.localRelay?.requiresAuth ?? false,
+                                    ownerPubkey: store.config.whitelistedPubkeys?.first ?? "",
+                                    whitelistedPubkeys: store.config.whitelistedPubkeys ?? [],
+                                    backendPrivateKey: store.config.tenexPrivateKey,
+                                    syncRelays: store.config.localRelay?.syncRelays ?? ["wss://tenex.chat"]
+                                )
+
                                 await relayManager.start()
                                 if relayManager.status == .running {
                                     negentropySync.configure(
@@ -330,6 +347,19 @@ struct GeneralConfigView: View {
                     store.config.localRelay = LocalRelayConfig()
                 }
                 store.config.localRelay?.port = $0
+                store.saveConfig()
+            }
+        )
+    }
+
+    private var localRelayRequiresAuthBinding: Binding<Bool> {
+        Binding(
+            get: { store.config.localRelay?.requiresAuth ?? false },
+            set: {
+                if store.config.localRelay == nil {
+                    store.config.localRelay = LocalRelayConfig()
+                }
+                store.config.localRelay?.requiresAuth = $0
                 store.saveConfig()
             }
         )

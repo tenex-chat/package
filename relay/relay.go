@@ -355,7 +355,10 @@ func (g *historicalQueryReplayGuard) Apply(ctx context.Context, filter *nostr.Fi
 		return
 	}
 
-	key := ip + "|" + historicalQuerySignature(*filter)
+	// Include authed pubkey so unauthenticated requests don't poison
+	// the cache for subsequent authenticated retries after NIP-42.
+	authed := khatru.GetAuthed(ctx)
+	key := ip + "|" + authed + "|" + historicalQuerySignature(*filter)
 	now := time.Now()
 
 	g.mu.Lock()

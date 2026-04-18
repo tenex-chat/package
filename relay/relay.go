@@ -55,6 +55,7 @@ func NewRelay(config *Config) (*Relay, error) {
 	var db eventstore.Store = dbImpl
 
 	relay := khatru.NewRelay()
+	ephemeralCache := newEphemeralEventCache(ephemeralEventRetention)
 	relay.MaxMessageSize = int64(config.Limits.MaxMessageLength)
 	recentHistoricalQueries := newHistoricalQueryReplayGuard(5 * time.Second)
 
@@ -71,7 +72,8 @@ func NewRelay(config *Config) (*Relay, error) {
 	relay.Info.Version = config.NIP11.Version
 
 	relay.StoreEvent = append(relay.StoreEvent, db.SaveEvent)
-	relay.QueryEvents = append(relay.QueryEvents, instrumentQueryEvents(db.QueryEvents))
+	relay.OnEphemeralEvent = append(relay.OnEphemeralEvent, ephemeralCache.Store)
+	relay.QueryEvents = append(relay.QueryEvents, ephemeralCache.QueryEvents, instrumentQueryEvents(db.QueryEvents))
 	relay.DeleteEvent = append(relay.DeleteEvent, db.DeleteEvent)
 	relay.CountEvents = append(relay.CountEvents, dbImpl.CountEvents)
 
@@ -333,14 +335,14 @@ func rejectBroadHistoricalCountFilter(filter nostr.Filter) (bool, string) {
 }
 
 type historicalQueryReplayGuard struct {
-	window time.Duration
-	mu sync.Mutex
+	window   time.Duration
+	mu       sync.Mutex
 	lastSeen map[string]time.Time
 }
 
 func newHistoricalQueryReplayGuard(window time.Duration) *historicalQueryReplayGuard {
 	return &historicalQueryReplayGuard{
-		window: window,
+		window:   window,
 		lastSeen: make(map[string]time.Time),
 	}
 }

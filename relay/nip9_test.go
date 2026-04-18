@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	evbadger "github.com/fiatjaf/eventstore/badger"
 	"github.com/nbd-wtf/go-nostr"
 )
 
@@ -19,26 +21,28 @@ func TestNIP9Deletion(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create storage
-	dbPath := filepath.Join(tmpDir, "events.json")
-	storage, err := NewStorage(dbPath)
-	if err != nil {
-		t.Fatalf("failed to create storage: %v", err)
+	storage := &evbadger.BadgerBackend{
+		Path:                  filepath.Join(tmpDir, "badger"),
+		BadgerOptionsModifier: silentBadger,
+	}
+	if err := storage.Init(); err != nil {
+		t.Fatalf("failed to initialize storage: %v", err)
 	}
 	defer storage.Close()
 
 	ctx := context.Background()
-	testPubkey := "ab12cd34ef56789012345678901234567890123456789012345678901234abcd"
-	otherPubkey := "ff12cd34ef56789012345678901234567890123456789012345678901234ffff"
+	testPubkey := strings.Repeat("a", 64)
+	otherPubkey := strings.Repeat("b", 64)
 
 	// Create a test event
 	originalEvent := &nostr.Event{
-		ID:        "event1234567890123456789012345678901234567890123456789012345678",
+		ID:        strings.Repeat("1", 64),
 		PubKey:    testPubkey,
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
 		Kind:      1,
 		Tags:      nostr.Tags{},
 		Content:   "Hello, world!",
-		Sig:       "sig123",
+		Sig:       strings.Repeat("c", 128),
 	}
 
 	// Save the original event
@@ -55,13 +59,13 @@ func TestNIP9Deletion(t *testing.T) {
 	t.Run("delete event with matching pubkey", func(t *testing.T) {
 		// Create a kind 5 deletion event from the same author
 		deletionEvent := &nostr.Event{
-			ID:        "delete12345678901234567890123456789012345678901234567890123456",
+			ID:        strings.Repeat("2", 64),
 			PubKey:    testPubkey, // Same pubkey as original
 			CreatedAt: nostr.Timestamp(time.Now().Unix()),
 			Kind:      5,
 			Tags:      nostr.Tags{{"e", originalEvent.ID}},
 			Content:   "delete this",
-			Sig:       "deletesig",
+			Sig:       strings.Repeat("d", 128),
 		}
 
 		// Simulate NIP-9 processing (what OnEventSaved does)
@@ -102,13 +106,13 @@ func TestNIP9Deletion(t *testing.T) {
 
 		// Create a deletion event from a different author
 		maliciousDeletion := &nostr.Event{
-			ID:        "malicious12345678901234567890123456789012345678901234567890123",
+			ID:        strings.Repeat("3", 64),
 			PubKey:    otherPubkey, // Different pubkey!
 			CreatedAt: nostr.Timestamp(time.Now().Unix()),
 			Kind:      5,
 			Tags:      nostr.Tags{{"e", originalEvent.ID}},
 			Content:   "trying to delete someone else's event",
-			Sig:       "badsig",
+			Sig:       strings.Repeat("e", 128),
 		}
 
 		// Simulate NIP-9 processing - should NOT delete
@@ -149,13 +153,13 @@ func TestNIP9Deletion(t *testing.T) {
 	t.Run("delete non-existent event", func(t *testing.T) {
 		// Try to delete an event that doesn't exist
 		deletionEvent := &nostr.Event{
-			ID:        "delete2345678901234567890123456789012345678901234567890123456",
+			ID:        strings.Repeat("4", 64),
 			PubKey:    testPubkey,
 			CreatedAt: nostr.Timestamp(time.Now().Unix()),
 			Kind:      5,
-			Tags:      nostr.Tags{{"e", "nonexistent123456789012345678901234567890123456789012345678"}},
+			Tags:      nostr.Tags{{"e", strings.Repeat("5", 64)}},
 			Content:   "delete this",
-			Sig:       "sig",
+			Sig:       strings.Repeat("f", 128),
 		}
 
 		// This should not panic or error

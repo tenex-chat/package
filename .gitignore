@@ -12,9 +12,11 @@ xcuserdata/
 build/
 DerivedData/
 target/
+relay/dist/
 
 # macOS
 .DS_Store
 
 # Git worktrees
 .worktrees/
+relay/dist/*.bak-*

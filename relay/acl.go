@@ -15,6 +15,16 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
+// deferredSub records a subscription that was deferred (LimitZero) because the
+// client was not yet whitelisted. Stored so we can backfill when they are later
+// added to the whitelist.
+type deferredSub struct {
+	ws     *khatru.WebSocket
+	id     string
+	filter nostr.Filter
+	ctx    context.Context // reqCtx — canceled on CLOSE or disconnect
+}
+
 // ACL manages a pubkey whitelist for read access control.
 // Admin pubkeys (from config) are always whitelisted. Publishing a kind 14199
 // event with p-tags dynamically whitelists those tagged pubkeys. Whitelisting
@@ -24,6 +34,7 @@ type ACL struct {
 	adminPubkeys map[string]bool
 	whitelist    map[string]bool
 	fileAllow    map[string]bool
+	deferred     map[string][]deferredSub // pubkey -> pending subs awaiting whitelist
 	mu           sync.RWMutex
 
 	storage eventstore.Store
@@ -41,6 +52,7 @@ func NewACL(adminPubkeys []string, storage eventstore.Store) *ACL {
 		adminPubkeys:      admins,
 		whitelist:         make(map[string]bool),
 		fileAllow:         make(map[string]bool),
+		deferred:          make(map[string][]deferredSub),
 		storage:           storage,
 		whitelistFilePath: defaultDaemonWhitelistPath(),
 	}
@@ -192,9 +204,11 @@ func (a *ACL) ProcessWhitelistEvent(event *nostr.Event) {
 
 	a.mu.Lock()
 
-	// Whitelist the author
+	var newlyWhitelisted []string
+
 	if !a.adminPubkeys[event.PubKey] && !a.whitelist[event.PubKey] {
 		a.whitelist[event.PubKey] = true
+		newlyWhitelisted = append(newlyWhitelisted, event.PubKey)
 		log.Printf("[acl] whitelisted author %s... (published 14199)", truncatePubkey(event.PubKey))
 	}
 
@@ -203,11 +217,52 @@ func (a *ACL) ProcessWhitelistEvent(event *nostr.Event) {
 			pk := tag[1]
 			if !a.adminPubkeys[pk] && !a.whitelist[pk] {
 				a.whitelist[pk] = true
+				newlyWhitelisted = append(newlyWhitelisted, pk)
 				log.Printf("[acl] whitelisted %s... (14199 from %s...)", truncatePubkey(pk), truncatePubkey(event.PubKey))
 			}
 		}
 	}
+
+	// Pull deferred subs for newly whitelisted pubkeys while still under lock.
+	toBackfill := make(map[string][]deferredSub, len(newlyWhitelisted))
+	for _, pk := range newlyWhitelisted {
+		if subs := a.deferred[pk]; len(subs) > 0 {
+			toBackfill[pk] = subs
+			delete(a.deferred, pk)
+		}
+	}
+
 	a.mu.Unlock()
+
+	for pk, subs := range toBackfill {
+		go a.backfillSubs(pk, subs)
+	}
+}
+
+func (a *ACL) backfillSubs(pubkey string, subs []deferredSub) {
+	for _, sub := range subs {
+		if sub.ctx.Err() != nil {
+			continue // subscription already closed or connection dropped
+		}
+		ch, err := a.storage.QueryEvents(sub.ctx, sub.filter)
+		if err != nil {
+			log.Printf("[acl] backfill query failed for %s...: %v", truncatePubkey(pubkey), err)
+			continue
+		}
+		count := 0
+		for event := range ch {
+			if sub.ctx.Err() != nil {
+				go func() {
+					for range ch {
+					}
+				}()
+				break
+			}
+			sub.ws.WriteJSON(nostr.EventEnvelope{SubscriptionID: &sub.id, Event: *event})
+			count++
+		}
+		log.Printf("[acl] backfilled %d event(s) to %s... (sub %s)", count, truncatePubkey(pubkey), sub.id)
+	}
 }
 
 // Public readable kinds are available to authenticated non-whitelisted users.
@@ -261,7 +316,20 @@ func (a *ACL) OverwriteFilterHook(ctx context.Context, filter *nostr.Filter) {
 		return
 	}
 
-	// Authenticated but not whitelisted: defer (skip stored events, register listener)
+	// Authenticated but not whitelisted: record the sub for later backfill, then defer.
+	ws := khatru.GetConnection(ctx)
+	subID := khatru.GetSubscriptionID(ctx)
+	filterCopy := *filter // copy before LimitZero is set
+
+	a.mu.Lock()
+	a.deferred[pubkey] = append(a.deferred[pubkey], deferredSub{
+		ws:     ws,
+		id:     subID,
+		filter: filterCopy,
+		ctx:    ctx,
+	})
+	a.mu.Unlock()
+
 	filter.LimitZero = true
 	log.Printf("[acl] deferred subscription for non-whitelisted pubkey %s...", truncatePubkey(pubkey))
 }
